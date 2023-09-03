@@ -1,0 +1,6 @@
+scikit-learn # mod_name=sklearn
+pandas
+numpy
+matplotlib
+requests
+json
