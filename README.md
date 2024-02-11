@@ -1,2 +1,4 @@
-# fpl
-Live analysis of Fantasy Premier League and predict best players
+# FPL
+
+Accessing the Fantasy Premier League API with Python.
+
