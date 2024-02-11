@@ -1,0 +1,23 @@
+label,name
+Minutes played,minutes
+Goals scored,goals_scored
+Assists,assists
+Clean sheets,clean_sheets
+Goals conceded,goals_conceded
+Own goals,own_goals
+Penalties saved,penalties_saved
+Penalties missed,penalties_missed
+Yellow cards,yellow_cards
+Red cards,red_cards
+Saves,saves
+Bonus,bonus
+Bonus Points System,bps
+Influence,influence
+Creativity,creativity
+Threat,threat
+ICT Index,ict_index
+Game(s) Started,starts
+Expected Goals,expected_goals
+Expected Assists,expected_assists
+Expected Goal Involvements,expected_goal_involvements
+Expected Goals Conceded,expected_goals_conceded
