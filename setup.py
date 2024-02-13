@@ -1,11 +1,11 @@
 from setuptools import setup
 
-VERSION = "0.0.0"
+__version__ = "0.0.0"
 DESCRIPTION = "Fantasy Premier League API Wrapper"
 
 setup(
     name="fantasypl",
-    version=VERSION,
+    version=__version__,
     author="Felix (Felix Hirwa Nshuti)",
     author_email="<hirwanshutiflx@gmail.com>",
     description=DESCRIPTION,
