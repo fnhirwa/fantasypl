@@ -15,6 +15,16 @@ FPL_MANAGER_GIVEN_GAMEWEEK = (
     "https://fantasy.premierleague.com/api/entry/{}/event/{}/picks/"
 )
 
+GENERIC_DATA_KEYLIST = [
+    "events",
+    "game_settings",
+    "phases",
+    "teams",
+    "total_players",
+    "elements",
+    "element_stats",
+    "element_types",
+    ]
 
 def download_data(url, file_path):
     """
@@ -28,17 +38,29 @@ def download_data(url, file_path):
 def convert_json_to_csv(json_file, csv_file):
     """
     Converts a .json file to a .csv file
+
+    Parameters
+    ----------
+    json_file : str
+        The path to the .json file
+
+    csv_file : str
+        The path to the .csv file
+
+    Returns
+    -------
+    None
     """
-    with open(json_file, "r") as f:
-        data = json.load(f)
+    with open(json_file, "r") as jsonfiledata:
+        data = json.load(jsonfiledata)
         players_data_keys = data["elements"][0].keys()
-        with open(csv_file, "w", newline="") as f:
-            writer = csv.DictWriter(f, players_data_keys)
+        with open(csv_file, "w", newline="") as csvfiledata:
+            writer = csv.DictWriter(csvfiledata, players_data_keys)
             writer.writeheader()
             writer.writerows(data["elements"])
 
 
-def download_fpl_generic_data():
+def download_fpl_generic_data(data_path):
     global FPL_GENERIC_INFO
     """
     Downloads the generic data from the FPL API and saves it to a .csv file
@@ -52,8 +74,11 @@ def download_fpl_generic_data():
     - Basic info on all FPL players
     - FPL positions
     - PL Players info
+
+    Returns
+    -------
+    None
     """
-    data_path = os.path.join(os.path.dirname(__file__), "data")
     csv_file_generic = os.path.join(data_path, "fpl_generic_data.csv")
     json_file_generic = os.path.join(data_path, "fpl_generic_data.json")
     download_data(FPL_GENERIC_INFO, json_file_generic)
@@ -61,35 +86,9 @@ def download_fpl_generic_data():
     print("Data downloaded and converted successfully!")
 
 
-# Everytime we want to update the data we will need to download it from API
-download_fpl_generic_data()
-print("Data downloaded successfully!")
-
-data_path = os.path.join(os.path.dirname(__file__), "data")
-json_file = os.path.join(data_path, "fpl_generic_data.json")
-# Replace 'your_json_file.json' with the path to your JSON file
-
-with open(json_file, "r") as file:
-    DATA = json.load(file)
-
-TOTAL_PLAYERS = DATA["total_players"]
-# keys of the generic data
-GENERIC_DATA_KEYLIST = [
-    "events",
-    "game_settings",
-    "phases",
-    "teams",
-    "total_players",
-    "elements",
-    "element_stats",
-    "element_types",
-]
-
-
 # organize the events data into a csv file for easy viewing
-def _write_the_generic_dict_settings_to_csv(key_element, preferred_file_name=None):
-    global DATA
-    key_data = DATA[key_element]
+def _write_the_generic_dict_settings_to_csv(data_path, key_element, data, preferred_file_name=None):
+    key_data = data[key_element]
     key_data_keys = key_data.keys()
     if preferred_file_name:
         file_path = os.path.join(data_path, f"generic_{preferred_file_name}.csv")
@@ -101,9 +100,8 @@ def _write_the_generic_dict_settings_to_csv(key_element, preferred_file_name=Non
         writer.writerow(key_data)
 
 
-def write_the_generic_list_element_to_csv(key_element, preferred_file_name=None):
-    global DATA
-    key_data = DATA[key_element]
+def write_the_generic_list_element_to_csv(data_path, key_element, data, preferred_file_name=None):
+    key_data = data[key_element]
     if isinstance(key_data, list):
         key_data_keys = key_data[0].keys()
         if preferred_file_name:
@@ -120,11 +118,8 @@ def write_the_generic_list_element_to_csv(key_element, preferred_file_name=None)
         )
 
 
-for key in GENERIC_DATA_KEYLIST:
-    write_the_generic_list_element_to_csv(key)
-
-
-def generic_data_writting():
+def generic_data_writting(data_path, data):
+    global GENERIC_DATA_KEYLIST
     print("Preparing the generic data...")
     for key in GENERIC_DATA_KEYLIST:
         if key != "total_players":
@@ -143,11 +138,6 @@ def generic_data_writting():
             elif key == "element_types":
                 preffered_file_name = "players_types"
             write_the_generic_list_element_to_csv(
-                key, preferred_file_name=preffered_file_name
+                data_path, data, key, preferred_file_name=preffered_file_name
             )
-
     print("Data written successfully!")
-
-
-if __name__ == "__main__":
-    generic_data_writting()
