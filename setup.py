@@ -1,11 +1,16 @@
 from setuptools import setup
+import os
 
-__version__ = "0.0.0"
+version = None
+parent_dir = os.path.dirname(__file__)
+init_path = os.path.join(parent_dir, "fantasypl", "__init__.py")
+with open(init_path) as f:
+    exec(f.read(), version)
 DESCRIPTION = "Fantasy Premier League API Wrapper"
 
 setup(
     name="fantasypl",
-    version=__version__,
+    version=version,
     author="Felix (Felix Hirwa Nshuti)",
     author_email="<hirwanshutiflx@gmail.com>",
     description=DESCRIPTION,
