@@ -54,15 +54,22 @@ class RegressionModel(BaseModel):
         self.predictions = []
         self.true_values = []
         self.feature_importance = None
+        self.feature_names_ = None
 
     def fit(self, X, y=None):
         """Fit the model."""
+        self.feature_names_ = list(X.columns)
         self.model.fit(X, y)
         return self
 
     def predict(self, X):
         """Generate predictions."""
-        return self.model.predict(X)
+        # Ensure the prediction data has the same columns as the training data
+        if self.feature_names_:
+            X_pred = X.reindex(columns=self.feature_names_, fill_value=0)
+        else:
+            X_pred = X
+        return self.model.predict(X_pred)
     
     def _create_model(self, model_type: str, **kwargs):
         """Create the underlying model."""

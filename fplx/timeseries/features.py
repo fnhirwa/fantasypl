@@ -53,8 +53,11 @@ class FeatureEngineer:
         """
         df = df.copy()
         
-        # Identify available columns
+        # Identify available columns and ensure they are numeric
         key_cols = [c for c in self.config['key_columns'] if c in df.columns]
+        
+        for col in key_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
         if not key_cols:
             logger.warning("No key columns found for feature engineering")

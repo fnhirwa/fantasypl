@@ -7,7 +7,7 @@
 
 ---
 
-## 🎯 Overview
+## Overview
 
 FPLX is a comprehensive Python library that combines:
 
@@ -21,7 +21,7 @@ Think of it as `scikit-learn + pandas + FPL domain logic`.
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -66,7 +66,7 @@ print(squad.summary())
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 fplx/
@@ -81,7 +81,7 @@ fplx/
 
 ---
 
-## 📊 Features
+## Features
 
 ### 1. Data Loading
 
@@ -163,7 +163,7 @@ squad = optimizer.optimize(players, expected_points)
 
 ---
 
-## 🔧 Advanced Usage
+## Advanced Usage
 
 ### Custom Configuration
 
@@ -203,7 +203,7 @@ model.set_optimizer('ilp')
 
 ---
 
-## 📈 Time-Series Approach
+## Time-Series Approach
 
 FPLX uses sophisticated time-series methods adapted from the [MLSP Final Project](https://github.com/jahyun03/11755-MLSP-Final-Project):
 
@@ -220,7 +220,7 @@ AdjustedScore = BaselinePoints × NewsAvailability × (1 - MinutesRisk) × Fixtu
 
 ---
 
-## 🧪 Examples
+## Examples
 
 Check out the `/examples` directory:
 
@@ -231,7 +231,7 @@ Check out the `/examples` directory:
 
 ---
 
-## 🛠️ Development
+## Development
 
 ### Setup
 
@@ -258,7 +258,7 @@ mypy fplx/
 
 ---
 
-## 📝 Roadmap
+## Roadmap
 
 ### Phase 1 - MVP ✅
 - [x] Data loading from FPL API

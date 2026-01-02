@@ -198,22 +198,48 @@ class FPLModel:
         
         all_expected_points = {}
         
+        # For ML models, we might want to train on all data at once.
+        # This is a simplified per-player approach.
+        if self.config.get('model_type', 'baseline') not in ['baseline', 'form_based']:
+            # For regression models, train on all players' data
+            all_features = []
+            all_targets = []
+            for player in self.players:
+                if not player.timeseries.empty:
+                    features = self.feature_engineer.fit_transform(player.timeseries)
+                    target = player.timeseries['points']
+                    
+                    # Align features and target
+                    aligned_features, aligned_target = features.align(target, join='inner', axis=0)
+                    all_features.append(aligned_features)
+                    all_targets.append(aligned_target)
+
+            if all_features:
+                X_train = pd.concat(all_features)
+                y_train = pd.concat(all_targets)
+                
+                # Ensure only numeric columns are passed to the model
+                X_train_numeric = X_train.select_dtypes(include=np.number)
+                self.model.fit(X_train_numeric, y_train)
+
         for player in self.players:
-            player_data = self.players_data[player.id]
-            
-            # feature engineering
-            features = self.feature_engineer.fit_transform(player_data)
-            
-            # model fitting & prediction
-            target = player_data['points']
-            self.model.fit(features, target)
-            
-            # predict for the next `horizon` gameweeks
-            future_features = self.feature_engineer.create_future_features(
-                player_data, self.horizon
-            )
-            predictions = self.model.predict(future_features)
-            
+            if self.config.get('model_type', 'baseline') in ['baseline', 'form_based']:
+                 # For baseline models, "fit" is a no-op, but we call it for consistency.
+                 # The prediction is based on the timeseries data passed to predict.
+                self.model.fit(player.timeseries)
+                predictions = self.model.predict(player.timeseries)
+            else:
+                # For ML models, we've already fit. Now we predict.
+                future_features = self.feature_engineer.create_future_features(
+                    player.timeseries, self.horizon
+                )
+                if not future_features.empty:
+                    # Ensure the prediction data has the same columns as the training data
+                    future_features_numeric = future_features.select_dtypes(include=np.number)
+                    predictions = self.model.predict(future_features_numeric)
+                else:
+                    predictions = np.array([0.0] * self.horizon)
+
             # signal adjustments
             news_sig = self.news_signal.generate_signal(player.news.get('summary', ''))
             # fixture_sig = self.fixture_signal.generate_signal(player.id) # Needs fixture data
