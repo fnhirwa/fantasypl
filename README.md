@@ -66,20 +66,6 @@ print(squad.summary())
 
 ---
 
-## Architecture
-
-```
-fplx/
-├── data/           # Data loading & schemas
-├── timeseries/     # Feature engineering & transforms
-├── signals/        # Stats, news, fixture signals
-├── models/         # ML models (baseline, regression, ensemble)
-├── selection/      # Squad optimization algorithms
-├── api/            # High-level user interface
-└── utils/          # Configuration & validation
-```
-
----
 
 ## Features
 
@@ -260,20 +246,20 @@ mypy fplx/
 
 ## Roadmap
 
-### Phase 1 - MVP ✅
+### Phase 1 - MVP
 - [x] Data loading from FPL API
 - [x] Time-series feature engineering
 - [x] Baseline & ML models
 - [x] Squad optimization (Greedy & ILP)
 - [x] Clean API interface
 
-### Phase 2 - Intelligence 🚧
+### Phase 2 - Intelligence
 - [ ] Advanced news parsing with NLP
 - [ ] Fixture difficulty modeling
 - [ ] Captain selection logic
 - [ ] Transfer optimization
 
-### Phase 3 - Advanced 🔮
+### Phase 3 - Advanced
 - [ ] Deep learning models (LSTM, Transformer)
 - [ ] Backtesting engine
 - [ ] Web dashboard
@@ -298,7 +284,7 @@ MIT License - see [LICENSE](LICENSE) file
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - FPL API for data
 - Time-series methods from [11755-MLSP-Final-Project](https://github.com/jahyun03/11755-MLSP-Final-Project)

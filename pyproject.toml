@@ -46,7 +46,6 @@ optimization = [
 ]
 deep = [
     "torch>=1.10.0",
-    "tensorflow>=2.8.0",
 ]
 dev = [
     "pytest>=7.0.0",
