@@ -1,6 +1,8 @@
 """Squad domain object."""
+
 from dataclasses import dataclass
 from typing import Optional
+
 from fplx.core.player import Player
 
 
@@ -8,7 +10,7 @@ from fplx.core.player import Player
 class Squad:
     """
     Represents an optimal 11-player fantasy squad.
-    
+
     Attributes
     ----------
     players : list[Player]
@@ -22,16 +24,17 @@ class Squad:
     captain : Optional[Player]
         Captain selection
     """
+
     players: list[Player]
     formation: str
     total_cost: float
     expected_points: float
     captain: Optional[Player] = None
-    
+
     def __post_init__(self):
         if len(self.players) != 11:
             raise ValueError("Squad must contain exactly 11 players.")
-            
+
     def summary(self) -> str:
         """Returns a formatted string summary of the squad."""
         summary_str = (

@@ -11,10 +11,10 @@ A production-ready Python library for:
 __version__ = "0.2.0"
 
 from fplx.api.interface import FPLModel
-from fplx.data.loaders import FPLDataLoader
+from fplx.core.matchweek import Matchweek
 from fplx.core.player import Player
 from fplx.core.squad import Squad
-from fplx.core.matchweek import Matchweek
+from fplx.data.loaders import FPLDataLoader
 
 __all__ = [
     "FPLModel",

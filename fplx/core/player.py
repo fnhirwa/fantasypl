@@ -1,6 +1,8 @@
 """Player domain object."""
+
 from dataclasses import dataclass
 from typing import Optional
+
 import pandas as pd
 
 
@@ -8,7 +10,7 @@ import pandas as pd
 class Player:
     """
     Represents a Fantasy Premier League player.
-    
+
     Attributes
     ----------
     id : int
@@ -26,6 +28,7 @@ class Player:
     news : Optional[dict]
         Latest news/injury information
     """
+
     id: int
     name: str
     team: str
@@ -33,17 +36,17 @@ class Player:
     price: float
     timeseries: pd.DataFrame
     news: Optional[dict] = None
-    
+
     @property
     def last_5_points(self) -> float:
         """Average points over last 5 gameweeks."""
         if len(self.timeseries) >= 5:
-            return self.timeseries['points'].tail(5).mean()
-        return self.timeseries['points'].mean()
-    
+            return self.timeseries["points"].tail(5).mean()
+        return self.timeseries["points"].mean()
+
     @property
     def availability(self) -> float:
         """Availability score (0-1) based on news."""
         if self.news is None:
             return 1.0
-        return self.news.get('availability', 1.0)
+        return self.news.get("availability", 1.0)

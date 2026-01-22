@@ -294,8 +294,8 @@ MIT License - see [LICENSE](LICENSE) file
 
 ## 📧 Contact
 
-**Felix Hirwa Nshuti**  
-Email: hirwanshutiflx@gmail.com  
+**Felix Hirwa Nshuti**
+Email: hirwanshutiflx@gmail.com
 GitHub: [@fnhirwa](https://github.com/fnhirwa)
 
 ---
