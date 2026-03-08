@@ -11,9 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class FixtureSignal(BaseSignal):
-    """
-    Generate signals based on fixture difficulty and schedule.
-    """
+    """Generate signals based on fixture difficulty and schedule."""
 
     def __init__(self, difficulty_ratings: Optional[dict[str, int]] = None):
         """

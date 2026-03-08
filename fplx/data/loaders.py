@@ -186,7 +186,7 @@ class FPLDataLoader:
         pd.DataFrame
             Loaded data
         """
-        logger.info(f"Loading data from {filepath}")
+        logger.info("Loading data from %s", filepath)
         df = pd.read_csv(filepath)
         return df
 
@@ -212,7 +212,7 @@ class FPLDataLoader:
                     player.timeseries = history
                 enriched.append(player)
             except Exception as e:
-                logger.warning(f"Could not load history for {player.name}: {e}")
+                logger.warning(f"Could not load history for %s : %s", player.name, e)
                 enriched.append(player)
 
         return enriched

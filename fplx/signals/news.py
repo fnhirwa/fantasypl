@@ -9,9 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class NewsParser:
-    """
-    Parse and interpret FPL news text into structured signals.
-    """
+    """Parse and interpret FPL news text into structured signals."""
 
     # Keyword patterns for availability
     UNAVAILABLE_PATTERNS = [
@@ -152,16 +150,13 @@ class NewsParser:
 
 
 class NewsSignal(BaseSignal):
-    """
-    Generate structured news signals for players.
-    """
+    """Generate structured news signals for players."""
 
     def __init__(self):
         self.parser = NewsParser()
 
     def generate_signal(self, news_text: str) -> dict[str, float]:
-        """
-        Generate signal from news text.
+        """Generate signal from news text.
 
         Parameters
         ----------
