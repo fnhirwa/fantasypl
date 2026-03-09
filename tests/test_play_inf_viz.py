@@ -97,7 +97,7 @@ def run_visualization(player_id=None):
     print(f"  Price: £{player['price']}m, Total points: {player['total_points']}")
 
     # Fetch history
-    print(f"\nFetching gameweek history...")
+    print("\nFetching gameweek history...")
     history = fetch_player_history(player["id"])
     if len(history) < 3:
         print(f"  Only {len(history)} gameweeks. Need at least 3.")

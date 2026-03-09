@@ -174,7 +174,7 @@ def run_batch(top_n=30, position_filter=None):
 
     if shifted:
         shifted_sorted = sorted(shifted, key=lambda x: -abs(x["shift"]))
-        print(f"\n--- Rank Shifts from News Injection ---")
+        print("\n--- Rank Shifts from News Injection ---")
         print(f"{'Player':<16} {'Old #':>6} {'New #':>6} {'Shift':>6} {'News'}")
         print("-" * 60)
         for s in shifted_sorted[:15]:

@@ -232,7 +232,7 @@ def run_test():
     ctrl_players = [r for r in results if not r["injected"]]
 
     if news_players:
-        print(f"\n--- Validation ---")
+        print("\n--- Validation ---")
 
         # Injured/unavailable players should have lower E[P] after injection
         injured = [r for r in news_players if r["status"] in ("i", "u", "s")]

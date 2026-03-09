@@ -1,23 +1,99 @@
-# FPLX - Fantasy Premier League Analysis & Optimization
+# FPLX — Stochastic Inference & Constrained Optimization for Fantasy Premier League
 
-**Production-ready Python library for FPL time-series analysis, player scoring, and optimal squad selection.**
-
-[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+FPLX treats FPL squad selection as a **dynamic decision problem under uncertainty**. Instead of producing static point projections, it models each player's underlying form as a latent variable, fuses noisy evidence (match stats, injury news, fixture difficulty) via probabilistic filters, and feeds the resulting distributions into a constrained optimizer.
+
+The system has three layers: **Perceive** (news signals, fixture data) → **Infer** (HMM + Kalman Filter → fused predictions with uncertainty) → **Act** (ILP/Greedy squad selection).
 
 ---
 
-## Overview
+## Architecture
 
-FPLX is a comprehensive Python library that combines:
+```
+FPL API (bootstrap-static, element-summary, fixtures)
+│
+├─ fplx/data/           Data loading & news collection
+│   ├─ loaders.py           FPL API client, CSV loader, player enrichment
+│   ├─ news_collector.py    Per-gameweek news snapshots from API
+│   └─ schemas.py           Pydantic validation schemas
+│
+├─ fplx/signals/        External signal processing
+│   ├─ news.py              NLP: parse injury/availability from news text
+│   ├─ fixtures.py          Fixture difficulty & congestion scoring
+│   └─ stats.py             Statistical performance aggregation
+│
+├─ fplx/inference/      Probabilistic inference pipeline (core contribution)
+│   ├─ hmm.py               Hidden Markov Model (5-state form tracking)
+│   ├─ kalman.py            Kalman Filter (continuous point potential)
+│   ├─ fusion.py            Inverse-variance weighting of HMM + KF
+│   └─ pipeline.py          Per-player orchestrator with signal injection
+│
+├─ fplx/timeseries/     Feature engineering
+│   ├─ transforms.py        Rolling, lag, EWMA, trend, consistency features
+│   └─ features.py          Feature engineering pipeline (40+ features)
+│
+├─ fplx/models/         Prediction models (baselines & ML)
+│   ├─ baseline.py          Rolling mean, EWMA, form-based heuristics
+│   ├─ regression.py        Ridge, XGBoost, LightGBM with rolling CV
+│   ├─ ensemble.py          Weighted & adaptive ensemble
+│   └─ rolling_cv.py        Time-aware cross-validation splits
+│
+├─ fplx/selection/      Squad optimization
+│   ├─ constraints.py       Formation, budget, team diversity constraints
+│   └─ optimizer.py         Greedy & ILP (PuLP) optimizers
+│
+├─ fplx/core/           Domain objects
+│   ├─ player.py            Player dataclass
+│   ├─ squad.py             Squad dataclass with validation
+│   └─ matchweek.py         Gameweek context
+│
+├─ fplx/utils/          Configuration & validation
+│   ├─ config.py            Nested config with dot-notation access
+│   └─ validation.py        Data quality checks & imputation
+│
+└─ fplx/api/
+    └─ interface.py         FPLModel: high-level orchestrator
+```
 
-- **Time-series analysis** of player performance data
-- **News & injury signal processing** for availability predictions
-- **Machine learning models** for expected points forecasting
-- **Optimization algorithms** for squad selection (ILP & Greedy)
-- **Clean, extensible API** for integration and customization
+---
 
-Think of it as `scikit-learn + pandas + FPL domain logic`.
+## Inference Pipeline
+
+The core contribution. Each player is modeled independently:
+
+```
+                         NewsSignal ──────┐
+                                          ▼
+Points history ──► HMM (discrete) ──► Transition perturbation
+     │               │                    │
+     │               ▼                    │
+     │          P(S_t | data)             │
+     │          {Injured, Slump,          │
+     │           Average, Good, Star}     │
+     │               │                    │
+     ├──► Kalman Filter (continuous) ◄────┘
+     │          x̂_t, P_t              Process noise shock
+     │               │
+     │          FixtureSignal ──► Observation noise modulation
+     │               │
+     ▼               ▼
+  Fusion (inverse-variance weighting)
+     │
+     ▼
+  E[P], Var[P]  ──►  ILP Optimizer
+```
+
+**HMM** tracks 5 discrete form states: `{Injured, Slump, Average, Good, Star}`. Each state has a Gaussian emission model defining expected points. The Forward-Backward algorithm computes smoothed posteriors; Viterbi decoding finds the most likely state sequence. Baum-Welch (EM) learns transition and emission parameters from data.
+
+**Kalman Filter** tracks a continuous latent variable representing the player's true point potential. A random-walk state model captures gradual form drift. The filter produces optimal minimum-MSE estimates with uncertainty bounds at each gameweek.
+
+**News injection** is where signals enter the inference. When `NewsSignal` classifies news as "ruled out," the HMM transition matrix for that timestep is perturbed (10x boost toward Injured state), and the Kalman Filter's process noise is inflated (true form may have jumped). This is fundamentally different from the post-hoc scalar multiplier used in static pipelines.
+
+**Fixture injection** modulates the Kalman Filter's observation noise. Harder opponents produce noisier point observations (R multiplied by 1.5 for difficulty-5 fixtures, 0.8 for difficulty-1).
+
+**Fusion** combines HMM and Kalman outputs via inverse-variance weighting. The fused variance is always lower than either component alone. The output is a `(mean, variance)` pair per player that feeds into the optimizer.
 
 ---
 
@@ -26,200 +102,205 @@ Think of it as `scikit-learn + pandas + FPL domain logic`.
 ### Installation
 
 ```bash
-# Basic installation
-pip install fplx
+git clone https://github.com/fnhirwa/fantasypl.git
+cd fantasypl
+pip install -e "."
 
-# With ML support
-pip install fplx[ml]
+# With ML models
+pip install -e ".[ml]"
 
-# With optimization support
-pip install fplx[optimization]
+# With ILP optimizer
+pip install -e ".[optimization]"
 
 # Everything
-pip install fplx[all]
+pip install -e ".[all]"
 ```
 
-### Usage
+### Inference Pipeline (recommended)
 
 ```python
 from fplx import FPLModel
 
-# Initialize model
 model = FPLModel(
     budget=100,
-    horizon=3,
-    formation="auto"
+    horizon=1,
+    formation="auto",
+    config={"model_type": "inference"}
 )
 
-# Load data from FPL API
-model.load_data(source='api')
+model.load_data(source="api")   # fetches FPL API + collects news
+model.fit()                     # runs HMM + KF + fusion per player
 
-# Fit model and generate predictions
+squad = model.select_best_11()
+print(squad.summary())
+
+# Uncertainty is available for downstream use
+for pid, ep in sorted(model.expected_points.items(), key=lambda x: -x[1])[:10]:
+    var = model.expected_variance[pid]
+    print(f"  Player {pid}: E[P]={ep:.2f}, std={var**0.5:.2f}")
+```
+
+### Legacy Pipeline (baselines)
+
+```python
+from fplx import FPLModel
+
+# Rolling average baseline
+model = FPLModel(budget=100, config={"model_type": "baseline"})
+model.load_data(source="api")
 model.fit()
-
-# Select optimal 11-player squad
 squad = model.select_best_11()
 
-# View squad summary
-print(squad.summary())
+# XGBoost (requires fplx[ml])
+model = FPLModel(budget=100, config={"model_type": "xgboost"})
 ```
 
----
-
-
-## Features
-
-### 1. Data Loading
+### Direct Inference (without FPLModel)
 
 ```python
-from fplx.data.loaders import FPLDataLoader
+import numpy as np
+from fplx.inference.pipeline import PlayerInferencePipeline
+from fplx.signals.news import NewsSignal
 
-loader = FPLDataLoader()
-players = loader.load_players()  # From FPL API
-history = loader.load_player_history(player_id=123)
-```
+# Player's gameweek-by-gameweek points
+points = np.array([6, 8, 5, 7, 9, 3, 6, 8, 7, 5, 0, 0, 0, 1, 2])
 
-### 2. Time-Series Feature Engineering
+pipeline = PlayerInferencePipeline()
+pipeline.ingest_observations(points)
 
-```python
-from fplx.timeseries import FeatureEngineer
+# Inject injury news at gameweek 11
+news = NewsSignal().generate_signal("Ruled out for 3 weeks")
+pipeline.inject_news(news, timestep=10)
 
-engineer = FeatureEngineer()
-enriched_data = engineer.fit_transform(player_timeseries)
+result = pipeline.run()
+ep_mean, ep_var = pipeline.predict_next()
 
-# Generates: rolling means, lags, EWMA, trends, consistency metrics
-```
-
-### 3. Signal Generation
-
-```python
-from fplx.signals import StatsSignal, NewsSignal, FixtureSignal
-
-# Statistical signals
-stats_signal = StatsSignal()
-score = stats_signal.compute_signal(player_data)
-
-# News signals
-news_signal = NewsSignal()
-signal = news_signal.generate_signal("Out for 2-3 weeks")
-# Returns: {'availability': 0.0, 'minutes_risk': 0.0, 'adjustment_factor': 0.0}
-
-# Fixture signals
-fixture_signal = FixtureSignal()
-advantage = fixture_signal.compute_fixture_advantage(
-    team="Arsenal",
-    upcoming_opponents=["Brighton", "Everton"],
-    is_home=[True, False]
-)
-```
-
-### 4. Prediction Models
-
-```python
-from fplx.models import BaselineModel, RegressionModel, EnsembleModel
-
-# Baseline (fast)
-baseline = BaselineModel(method='rolling_mean', window=5)
-predictions = baseline.batch_predict(players_data)
-
-# ML Regression
-ml_model = RegressionModel(model_type='xgboost')
-predictions = ml_model.fit_predict(y, X)
-
-# Ensemble
-ensemble = EnsembleModel(
-    models=[baseline, ml_model],
-    weights=[0.4, 0.6]
-)
-```
-
-### 5. Squad Optimization
-
-```python
-from fplx.selection import GreedyOptimizer, ILPOptimizer
-
-# Greedy (fast)
-optimizer = GreedyOptimizer(budget=100)
-squad = optimizer.optimize(players, expected_points, formation="3-4-3")
-
-# ILP (optimal)
-optimizer = ILPOptimizer(budget=100)
-squad = optimizer.optimize(players, expected_points)
-```
-
----
-
-## Advanced Usage
-
-### Custom Configuration
-
-```python
-config = {
-    'model_type': 'xgboost',
-    'optimizer': 'ilp',
-    'feature_engineering': {
-        'rolling_windows': [3, 5, 10],
-        'lag_periods': [1, 2, 3],
-    }
-}
-
-model = FPLModel(budget=100, config=config)
-```
-
-### Loading Custom Data
-
-```python
-# From CSV
-model.load_data(source='csv', filepath='my_data.csv')
-
-# News data
-model.load_news('news.json')
-
-# Stats data
-model.load_stats('player_stats.csv')
-```
-
-### Model Selection
-
-```python
-# Switch to different models
-model.set_model('xgboost', n_estimators=200, max_depth=5)
-model.set_optimizer('ilp')
-```
-
----
-
-## Time-Series Approach
-
-FPLX uses sophisticated time-series methods adapted from the [MLSP Final Project](https://github.com/jahyun03/11755-MLSP-Final-Project):
-
-- **Rolling Cross-Validation**: Time-aware train/test splits
-- **Feature Engineering**: 40+ engineered features per player
-- **Ensemble Models**: Combine multiple predictors
-- **Signal Integration**: Merge stats, news, and fixtures
-
-### Expected Points Formula
-
-```
-AdjustedScore = BaselinePoints × NewsAvailability × (1 - MinutesRisk) × FixtureAdvantage
+print(f"Next GW: E[P]={ep_mean:.2f}, std={ep_var**0.5:.2f}")
+print(f"Current state: {result.viterbi_path[-1]}")  # 0=Injured,...,4=Star
+print(f"P(Injured): {result.smoothed_beliefs[-1, 0]:.3f}")
 ```
 
 ---
 
 ## Examples
 
-Check out the `/examples` directory:
+Run from the repo root. Each example hits the live FPL API.
 
-- `basic_usage.py` - Simple squad selection
-- `custom_signals.py` - Add custom signals
-- `advanced_optimization.py` - ILP optimization with constraints
-- `backtesting.py` - Evaluate historical performance
+```bash
+# 1. Inspect what news data the API provides (run first)
+python tests/test_fpl_news_api.py
+
+# 2. Test news → inference pipeline on flagged players
+python tests/test_news_inference.py
+
+# 3. Deep-dive visualization for a specific player
+python tests/test_play_inf_viz.py
+python tests/test_play_inf_viz.py --player-id 301
+
+# 4. Batch inference with squad ranking and risk adjustment
+python tests/test_batch_inference.py --top 50
+python tests/test_batch_inference.py --position MID
+```
+
+---
+
+## News Signal Integration
+
+FPLX uses news data from the FPL API itself. Every player in the `bootstrap-static` response includes:
+
+| Field | Example | Usage |
+|-------|---------|-------|
+| `news` | `"Knee injury - expected back 01 Feb"` | Parsed by `NewsSignal` |
+| `status` | `"i"` (injured), `"d"` (doubtful), `"a"` (available) | Classified into perturbation category |
+| `chance_of_playing_next_round` | `25` (percent) | Augments news text |
+
+`NewsCollector` snapshots this data per gameweek (persisted as JSON in `~/.fplx/news/`). `NewsSnapshot.to_news_signal_input()` enriches the raw text with status codes and chance percentages, then routes through the existing `NewsSignal.generate_signal()` parser.
+
+The parsed signal maps to inference perturbations:
+
+| News Category | HMM Perturbation | KF Process Noise |
+|---------------|-------------------|------------------|
+| Unavailable (`"ruled out"`, status=`i`) | Injured state ×10 | Q × 5.0 |
+| Doubtful (`"late fitness test"`, status=`d`) | Injured ×3, Slump ×2 | Q × 2.0 |
+| Rotation (`"rotation risk"`, `"benched"`) | Slump ×2, Average ×1.5 | Q × 1.5 |
+| Positive (`"back in training"`, status=`a`) | Good ×2, Star ×1.5 | Q × 1.0 |
+| Neutral (no news) | No perturbation | No change |
+
+No external scraping required.
+
+---
+
+## Configuration
+
+All components are configurable via the `config` dict:
+
+```python
+config = {
+    # Prediction mode: "inference", "baseline", "form_based",
+    # "ridge", "xgboost", "lightgbm", "ensemble"
+    "model_type": "inference",
+
+    # Optimizer: "greedy" or "ilp" (requires pulp)
+    "optimizer": "greedy",
+
+    # Inference parameters (only used when model_type="inference")
+    "inference": {
+        "hmm_params": {
+            # Override default transition matrix, emission params, initial dist
+        },
+        "kf_params": {
+            "Q": 1.0,    # Process noise (form drift rate)
+            "R": 4.0,    # Observation noise (weekly point variance)
+            "x0": 4.0,   # Initial state estimate
+            "P0": 2.0,   # Initial uncertainty
+        },
+    },
+
+    # Feature engineering (used by legacy ML models)
+    "feature_engineering": {
+        "rolling_windows": [3, 5, 10],
+        "lag_periods": [1, 2, 3],
+        "ewma_alphas": [0.3, 0.5],
+    },
+
+    # Signal weights (used by StatsSignal)
+    "signals": {
+        "stats_weights": {
+            "points_mean": 0.3,
+            "xG_mean": 0.15,
+            "xA_mean": 0.15,
+            "minutes_consistency": 0.2,
+            "form_trend": 0.2,
+        },
+    },
+}
+```
+
+---
+
+## Project Structure
+
+```
+fantasypl/
+├── fplx/                    Python package
+│   ├── api/                 High-level interface (FPLModel)
+│   ├── core/                Domain objects (Player, Squad, Matchweek)
+│   ├── data/                Data loading & news collection
+│   ├── inference/           HMM, Kalman Filter, fusion, pipeline
+│   ├── models/              Baseline, regression, ensemble models
+│   ├── selection/           Squad optimization (Greedy, ILP)
+│   ├── signals/             News, fixture, stats signal processing
+│   ├── timeseries/          Feature engineering transforms
+│   └── utils/               Config, validation, imputation
+├── examples/                Runnable examples (hit live FPL API)
+├── tests/                   Test suite
+├── pyproject.toml           Build config, dependencies, tool settings
+└── README.md
+```
 
 ---
 
 ## Development
-
-### Setup
 
 ```bash
 git clone https://github.com/fnhirwa/fantasypl.git
@@ -227,77 +308,64 @@ cd fantasypl
 python -m venv env
 source env/bin/activate
 pip install -e ".[dev]"
-```
 
-### Run Tests
-
-```bash
+# Run tests
 pytest tests/
-```
 
-### Format Code
-
-```bash
-black fplx/
-mypy fplx/
+# Format
+ruff format fplx/
+ruff check fplx/ --fix
 ```
 
 ---
 
 ## Roadmap
 
-### Phase 1 - MVP
+### Done
 - [x] Data loading from FPL API
-- [x] Time-series feature engineering
-- [x] Baseline & ML models
+- [x] Time-series feature engineering (40+ features)
+- [x] Baseline models (rolling mean, EWMA, form-based)
+- [x] ML models (Ridge, XGBoost, LightGBM)
 - [x] Squad optimization (Greedy & ILP)
-- [x] Clean API interface
+- [x] HMM for discrete form state tracking
+- [x] Kalman Filter for continuous point potential
+- [x] HMM + KF fusion with inverse-variance weighting
+- [x] News signal injection into inference (dynamic transition perturbation)
+- [x] Fixture difficulty → KF observation noise modulation
+- [x] Per-gameweek news collection & persistence
+- [x] Baum-Welch (EM) for HMM parameter learning
 
-### Phase 2 - Intelligence
-- [ ] Advanced news parsing with NLP
-- [ ] Fixture difficulty modeling
-- [ ] Captain selection logic
-- [ ] Transfer optimization
+### In Progress
+- [ ] Wire fixture data into `_fit_inference()` pipeline
+- [ ] Mean-variance objective in ILP (robust optimization)
+- [ ] Backtest engine (replay season with weekly news injection)
 
-### Phase 3 - Advanced
+### Planned
+- [ ] Shared HMM parameters by position (pool data across players)
+- [ ] Captain selection with uncertainty-aware logic
+- [ ] Transfer optimization (multi-period planning)
+- [ ] Calibration analysis (coverage of 95% credible intervals)
 - [ ] Deep learning models (LSTM, Transformer)
-- [ ] Backtesting engine
 - [ ] Web dashboard
-- [ ] Real-time updates
 
 ---
 
-## 🤝 Contributing
+## Research Context
 
-Contributions welcome! Please:
+This project implements the pipeline titled:
 
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new features
-4. Submit a pull request
+> *FPLX: A Framework for Stochastic Inference and Constrained Optimization in High-Variance Sports Environments*
 
----
+The key insight is treating FPL squad selection as a **Perceive → Infer → Act** loop where uncertainty propagates end-to-end from observation noise through to squad selection. This contrasts with standard approaches that decouple forecasting from optimization and discard uncertainty at the interface.
 
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file
+References: Matthews et al. (AAAI 2012), Tamimi & Tran (IJCSS 2025), Ramezani (arXiv 2025), Brill et al. (arXiv 2024).
 
 ---
 
-## Acknowledgments
+## License
 
-- FPL API for data
-- Time-series methods from [11755-MLSP-Final-Project](https://github.com/jahyun03/11755-MLSP-Final-Project)
-- Inspiration from the FPL community
+MIT — see [LICENSE](LICENSE).
 
----
+## Author
 
-## 📧 Contact
-
-**Felix Hirwa Nshuti**
-Email: hirwanshutiflx@gmail.com
-GitHub: [@fnhirwa](https://github.com/fnhirwa)
-
----
-
-**Built with ❤️ for the FPL community**
+**Felix Hirwa Nshuti** — [hirwanshutiflx@gmail.com](mailto:hirwanshutiflx@gmail.com) — [@fnhirwa](https://github.com/fnhirwa)
