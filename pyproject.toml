@@ -65,6 +65,7 @@ docs = [
     "mkdocs-gen-files>=0.5",
     "mkdocs-literate-nav>=0.6",
     "mkdocs-section-index>=0.3",
+    "mkdocs-material-extensions>=0.1.0",
 ]
 
 all = [

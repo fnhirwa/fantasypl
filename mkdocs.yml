@@ -72,8 +72,8 @@ plugins:
             signature_crossrefs: true
             heading_level: 2
             filters:
-              - "!^_"           # exclude private members
-              - "^__init__$"    # but include __init__
+              - "!^_"
+              - "^__init__$"
 
 markdown_extensions:
   - admonition
@@ -82,7 +82,7 @@ markdown_extensions:
       custom_fences:
         - name: mermaid
           class: mermaid
-          format: pymdownx.superfences.fence_code_format
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
       line_spans: __span
@@ -92,8 +92,12 @@ markdown_extensions:
       alternate_style: true
   - pymdownx.arithmatex:
       generic: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - attr_list
   - md_in_html
+  - def_list
   - tables
   - toc:
       permalink: true
@@ -106,11 +110,18 @@ nav:
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
-  - Guides:
-    - guides/index.md
-    - Inference Pipeline: guides/inference-pipeline.md
-    - News Signals: guides/news-signals.md
-    - Architecture: guides/architecture.md
+  - "Part I — Inference (18-662)":
+    - inference/index.md
+    - Inference Pipeline: inference/pipeline.md
+    - News Signals: inference/news-signals.md
+    - HMM Details: inference/hmm.md
+    - Kalman Filter: inference/kalman.md
+  - "Part II — Optimization (18-660)":
+    - optimization/index.md
+    - Squad Selection ILP: optimization/squad-ilp.md
+    - Duality & Shadow Prices: optimization/duality.md
+    - Numerical Experiments: optimization/experiments.md
+  - Architecture: architecture.md
   - API Reference: api/
   - Examples: examples.md
 
