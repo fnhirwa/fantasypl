@@ -99,9 +99,7 @@ class BaselineModel(BaseModel):
 
 
 class FormBasedModel(BaselineModel):
-    """
-    Enhanced baseline using form indicators.
-    """
+    """Enhanced baseline using form indicators."""
 
     def predict(self, X: pd.DataFrame) -> float:
         """
@@ -109,7 +107,7 @@ class FormBasedModel(BaselineModel):
 
         Parameters
         ----------
-        player_data : pd.DataFrame
+        X : pd.DataFrame
             Player historical data
 
         Returns
@@ -126,9 +124,8 @@ class FormBasedModel(BaselineModel):
         latest = X.iloc[-1]
 
         # Minutes adjustment: if playing less, reduce prediction
-        if "minutes" in latest:
-            if latest["minutes"] < 60:
-                base_prediction *= 0.7
+        if "minutes" in latest and latest["minutes"] < 60:
+            base_prediction *= 0.7
 
         # Trend adjustment
         if "points_trend_5" in latest:

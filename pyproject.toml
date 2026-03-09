@@ -58,14 +58,23 @@ dev = [
     "flake8",
     "pre-commit"
 ]
+docs = [
+    "mkdocs>=1.6,<2.0",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.27",
+    "mkdocs-gen-files>=0.5",
+    "mkdocs-literate-nav>=0.6",
+    "mkdocs-section-index>=0.3",
+]
+
 all = [
-    "fplx[ml,optimization,deep,dev]",
+    "fplx[ml,optimization,deep,dev, docs]",
 ]
 
 [project.urls]
 Homepage = "https://github.com/fnhirwa/fantasypl"
 Repository = "https://github.com/fnhirwa/fantasypl"
-Documentation = "https://github.com/fnhirwa/fantasypl#readme"
+Documentation = "https://fnhirwa.github.io/fantasypl/"
 "Bug Tracker" = "https://github.com/fnhirwa/fantasypl/issues"
 
 [tool.setuptools.packages.find]
@@ -74,7 +83,7 @@ exclude = ["tests*", "fantasypl*", "build*", "env*"]
 
 [tool.black]
 line-length = 100
-target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+target-version = ['py39', 'py310', 'py311', 'py312']
 
 [tool.mypy]
 python_version = "3.8"
