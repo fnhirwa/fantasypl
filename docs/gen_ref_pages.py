@@ -34,8 +34,8 @@ for path in sorted(root.rglob("*.py")):
             doc_path = Path("index.md")
             full_doc_path = ref_dir / doc_path
         else:
-            doc_path = Path(*parts[1:]) / "index.md" if len(parts) > 1 else Path("index.md")
-            full_doc_path = ref_dir / doc_path
+            doc_path = Path(*parts) / "index.md"
+            full_doc_path = ref_dir.joinpath(*parts[1:]).joinpath("index.md")
 
     # Skip empty parts
     if not parts:
