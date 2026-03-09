@@ -85,13 +85,3 @@ Available via [`KalmanFilter.smooth()`][fplx.inference.kalman.KalmanFilter.smoot
     $R$ can be estimated from the empirical variance of weekly points across the league.
 
 ## API
-
-::: fplx.inference.kalman.KalmanFilter
-    options:
-      show_source: false
-      members:
-        - filter
-        - predict_next
-        - smooth
-        - inject_process_shock
-        - inject_observation_noise

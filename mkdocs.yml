@@ -122,7 +122,7 @@ nav:
     - Duality & Shadow Prices: optimization/duality.md
     - Numerical Experiments: optimization/experiments.md
   - Architecture: architecture.md
-  - API Reference: api/
+  - API Reference: api/index.md
   - Examples: examples.md
 
 extra:

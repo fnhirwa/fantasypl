@@ -70,14 +70,3 @@ The E-step uses Forward-Backward (already implemented). The M-step re-estimates:
     Baum-Welch needs sufficient data per player. Players with <10 gameweeks may not have enough. A future improvement is learning shared parameters across all players in the same position, then fine-tuning per player.
 
 ## API
-
-::: fplx.inference.hmm.HMMInference
-    options:
-      show_source: false
-      members:
-        - forward
-        - forward_backward
-        - viterbi
-        - predict_next
-        - inject_news_perturbation
-        - fit
