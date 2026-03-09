@@ -43,5 +43,5 @@ graph LR
 
 - :material-rocket-launch: [**Installation**](getting-started/installation.md) — Set up FPLX in minutes
 - :material-code-braces: [**Quick Start**](getting-started/quickstart.md) — Run your first squad selection
-- :material-api: [**API Reference**](api/) — Auto-generated from docstrings
+- :material-api: [**API Reference**](api/index.md) — Auto-generated from docstrings
 - :material-test-tube: [**Examples**](examples.md) — Runnable scripts against the live FPL API

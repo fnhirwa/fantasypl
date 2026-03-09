@@ -12,50 +12,59 @@ import mkdocs_gen_files
 
 nav = mkdocs_gen_files.Nav()
 
-root = Path("fplx")
+src = Path(".")
 ref_dir = Path("api")
+subpackages = []
 
-for path in sorted(root.rglob("*.py")):
-    module_path = path.with_suffix("")
-    doc_path = path.relative_to(root).with_suffix(".md")
+for path in sorted(Path("fplx").rglob("*.py")):
+    if "__pycache__" in path.parts:
+        continue
+
+    module_path = path.relative_to(src).with_suffix("")
+    doc_path = path.relative_to(src).with_suffix(".md")
     full_doc_path = ref_dir / doc_path
 
     parts = tuple(module_path.parts)
 
-    # Skip __pycache__
-    if "__pycache__" in parts:
-        continue
-
-    # Handle __init__.py → package index page
     if parts[-1] == "__init__":
         parts = parts[:-1]
-        if not parts:
-            # Root __init__.py → api/index.md
-            doc_path = Path("index.md")
-            full_doc_path = ref_dir / doc_path
-        else:
-            doc_path = Path(*parts) / "index.md"
-            full_doc_path = ref_dir.joinpath(*parts[1:]).joinpath("index.md")
+        doc_path = doc_path.with_name("index.md")
+        full_doc_path = full_doc_path.with_name("index.md")
+    elif parts[-1] == "__main__" or parts[-1].startswith("_"):
+        continue
 
-    # Skip empty parts
     if not parts:
         continue
 
-    # Build the Python import path (e.g., "fplx.inference.hmm")
-    python_path = ".".join(parts)
+    # Collect direct subpackages for the landing page
+    if len(parts) == 2 and (Path("fplx") / parts[1] / "__init__.py").exists():
+        subpackages.append(parts[1])
 
-    # Build a readable nav label
-    if len(parts) == 1:
-        nav_parts = ("fplx",)
-    else:
-        nav_parts = parts[1:]  # Strip "fplx" prefix for cleaner nav
+    nav[parts] = doc_path.as_posix()
 
-    nav[nav_parts] = doc_path.as_posix()
+    # For the root fplx package, generate a landing page instead of ::: fplx
+    if parts == ("fplx",):
+        continue
 
     with mkdocs_gen_files.open(full_doc_path, "w") as fd:
-        fd.write(f"::: {python_path}\n")
+        ident = ".".join(parts)
+        print(f"::: {ident}", file=fd)
 
     mkdocs_gen_files.set_edit_path(full_doc_path, path)
+
+# Write the root API landing page
+with mkdocs_gen_files.open(ref_dir / "fplx" / "index.md", "w") as fd:
+    print("# fplx", file=fd)
+    print("", file=fd)
+    print("::: fplx", file=fd)
+    print("    options:", file=fd)
+    print("      show_submodules: true", file=fd)
+    print("", file=fd)
+    print("## Subpackages", file=fd)
+    print("", file=fd)
+    for pkg in sorted(set(subpackages)):
+        label = f"fplx.{pkg}"
+        print(f"- [`{label}`]({pkg}/index.md)", file=fd)
 
 # Write the navigation file for literate-nav
 with mkdocs_gen_files.open(ref_dir / "SUMMARY.md", "w") as nav_file:
