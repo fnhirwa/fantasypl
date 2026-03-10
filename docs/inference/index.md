@@ -1,7 +1,7 @@
-# Part I — Probabilistic Inference (18-662)
+# Part I — Probabilistic Inference
 
 !!! abstract "Course Context"
-    This component implements the inference pipeline for **18-662: Introduction to AI**.
+    This component implements the inference pipeline.
     It demonstrates **Perceiving** (NLP signal processing), **Belief updating** (HMM/Kalman filtering),
     and feeds into the **Acting** stage (Part II).
 

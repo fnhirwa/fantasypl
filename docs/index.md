@@ -6,10 +6,10 @@ FPLX treats FPL squad selection as a dynamic decision problem under uncertainty.
 
 This project spans two components:
 
-| | Component | Course | Focus |
-|---|-----------|--------|-------|
-| :material-brain: | [**Part I — Inference**](inference/index.md) | 18-662 | HMM + Kalman Filter for probabilistic point forecasting with news signal injection |
-| :material-chart-box: | [**Part II — Optimization**](optimization/index.md) | 18-660 | ILP formulation, duality analysis, and robust squad selection under uncertainty |
+| | Component | Focus |
+|---|-----------|-------|
+| :material-brain: | [**Part I — Inference**](inference/index.md) | HMM + Kalman Filter for probabilistic point forecasting with news signal injection |
+| :material-chart-box: | [**Part II — Optimization**](optimization/index.md) | ILP formulation, duality analysis, and robust squad selection under uncertainty |
 
 ---
 

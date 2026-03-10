@@ -110,13 +110,13 @@ nav:
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
-  - "Part I — Inference (18-662)":
+  - "Part I — Inference":
     - inference/index.md
     - Inference Pipeline: inference/pipeline.md
     - News Signals: inference/news-signals.md
     - HMM Details: inference/hmm.md
     - Kalman Filter: inference/kalman.md
-  - "Part II — Optimization (18-660)":
+  - "Part II — Optimization":
     - optimization/index.md
     - Squad Selection ILP: optimization/squad-ilp.md
     - Duality & Shadow Prices: optimization/duality.md

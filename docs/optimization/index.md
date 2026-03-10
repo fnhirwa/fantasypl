@@ -1,7 +1,7 @@
-# Part II — Constrained Optimization (18-660)
+# Part II — Constrained Optimization
 
 !!! abstract "Course Context"
-    This component implements the squad-selection optimization for **18-660: Mathematical Methods for Optimization**.
+    This component implements the squad-selection optimization.
     It takes the inference outputs from Part I (predicted points with uncertainty) and solves a constrained
     integer program to select the optimal 11-player squad.
 
