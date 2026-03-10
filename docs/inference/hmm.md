@@ -1,6 +1,6 @@
 # Hidden Markov Model
 
-The HMM tracks discrete form states for each player. It handles **abrupt regime shifts** — an injury doesn't gradually reduce points; it causes a sudden jump to a different operating regime.
+The HMM tracks discrete form states for each player. It handles **abrupt regime shifts**, an injury doesn't gradually reduce points; it causes a sudden jump to a different operating regime.
 
 ## State Space
 
@@ -28,7 +28,7 @@ Star     [0.01, 0.02, 0.07, 0.30, 0.60]
 ```
 
 !!! note "Design Decision"
-    Injured is structurally different from the other states — it represents availability, not form level. We keep it in the state space (rather than modeling it separately) because the transition dynamics between injury and form states are informative: an injured player typically recovers through Slump → Average, not directly to Star.
+    Injured is structurally different from the other states. It represents availability, not form level. We keep it in the state space (rather than modeling it separately) because the transition dynamics between injury and form states are informative: an injured player typically recovers through Slump → Average, not directly to Star.
 
 ## Algorithms
 
@@ -48,7 +48,7 @@ $$A_t[i, j] \leftarrow A[i, j] \times \big(1 + c \cdot (b_j - 1)\big)$$
 
 where $b_j$ is the boost factor for target state $j$ and $c \in [0, 1]$ is the news confidence. Each row is then renormalized to sum to 1.
 
-This means even from the Star state, an "unavailable" signal makes transitioning to Injured 10× more likely — but the observation evidence still has a say. The perturbation is **not** a hard override.
+This means even from the Star state, an "unavailable" signal makes transitioning to Injured 10× more likely, but the observation evidence still has a say. The perturbation is **not** a hard override.
 
 ```python
 hmm.inject_news_perturbation(
@@ -68,5 +68,3 @@ The E-step uses Forward-Backward (already implemented). The M-step re-estimates:
 
 !!! warning "Data Requirements"
     Baum-Welch needs sufficient data per player. Players with <10 gameweeks may not have enough. A future improvement is learning shared parameters across all players in the same position, then fine-tuning per player.
-
-## API

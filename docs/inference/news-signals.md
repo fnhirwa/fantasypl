@@ -1,6 +1,6 @@
 # News Signals
 
-FPLX uses news data from the FPL API itself — no external scraping required.
+FPLX uses news data from the FPL API itself, no external scraping required.
 
 ## Data Source
 

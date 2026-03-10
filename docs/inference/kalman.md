@@ -1,6 +1,6 @@
 # Kalman Filter
 
-The Kalman Filter tracks a **continuous** latent variable representing the player's true point potential. It handles **gradual form drift** — a player slowly improving or declining across gameweeks.
+The Kalman Filter tracks a **continuous** latent variable representing the player's true point potential. It handles **gradual form drift**, a player slowly improving or declining across gameweeks.
 
 ## State-Space Model
 
@@ -83,5 +83,3 @@ Available via [`KalmanFilter.smooth()`][fplx.inference.kalman.KalmanFilter.smoot
 !!! tip "Tuning"
     $Q$ should be **higher** for young/volatile players and **lower** for established veterans.
     $R$ can be estimated from the empirical variance of weekly points across the league.
-
-## API

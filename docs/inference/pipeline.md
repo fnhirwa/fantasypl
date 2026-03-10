@@ -28,7 +28,7 @@ The HMM tracks 5 discrete form states. Each state has a Gaussian emission model 
 | Good | 6.0 | 1.5 | Above-average returns |
 | Star | 8.5 | 2.0 | Exceptional gameweek |
 
-States are "sticky" — the default transition matrix has high self-transition probabilities (0.50–0.60) with gradual drift between adjacent states.
+States are "sticky", the default transition matrix has high self-transition probabilities (0.50–0.60) with gradual drift between adjacent states.
 
 ### Algorithms
 
@@ -45,7 +45,7 @@ When news is injected at timestep $t$, the transition matrix for that timestep i
 
 $$A_t[i, j] = A[i, j] \times \big(1 + c \cdot (b_j - 1)\big)$$
 
-where $b_j$ is the boost factor for target state $j$ and $c$ is the news confidence. The row is then renormalized. This means even from the Star state, an "unavailable" signal makes transitioning to Injured 10× more likely — but the observation evidence still has a say.
+where $b_j$ is the boost factor for target state $j$ and $c$ is the news confidence. The row is then renormalized. This means even from the Star state, an "unavailable" signal makes transitioning to Injured 10× more likely, but the observation evidence still has a say.
 
 ## Kalman Filter
 
@@ -68,7 +68,7 @@ Both $Q_t$ and $R_t$ can be overridden per-timestep by external signals:
 | Hard fixture | $R_t = R \times 1.5$ | Points less predictable, trust prior more |
 
 !!! info "Kalman Gain Interpretation"
-    When $Q_t$ is large, the Kalman gain $K$ increases — the filter trusts the next observation more (prior is wide). When $R_t$ is large, $K$ decreases — the filter trusts the prior more (observation is noisy).
+    When $Q_t$ is large, the Kalman gain $K$ increases, the filter trusts the next observation more (prior is wide). When $R_t$ is large, $K$ decreases, the filter trusts the prior more (observation is noisy).
 
 ## Fusion
 
@@ -81,7 +81,7 @@ $$\sigma^2_{\text{fused}} = \frac{1}{1/\sigma^2_{HMM} + 1/\sigma^2_{KF}}$$
 The fused variance is always $\leq \min(\sigma^2_{HMM}, \sigma^2_{KF})$: combining two estimates always reduces uncertainty.
 
 !!! warning "Independence Assumption"
-    This assumes the HMM and KF estimates are independent. They share the same observation sequence, so this is approximate. The approximation is acceptable because the HMM captures discrete regime structure while the KF captures continuous trends — they extract different information from the same data.
+    This assumes the HMM and KF estimates are independent. They share the same observation sequence, so this is approximate. The approximation is acceptable because the HMM captures discrete regime structure while the KF captures continuous trends, they extract different information from the same data.
 
 ## Usage
 

@@ -348,7 +348,7 @@ ruff check fplx/ --fix
 - [ ] Deep learning models (LSTM, Transformer)
 - [ ] Web dashboard
 
----
+
 
 ## Research Context
 
@@ -359,13 +359,3 @@ This project implements the pipeline titled:
 The key insight is treating FPL squad selection as a **Perceive → Infer → Act** loop where uncertainty propagates end-to-end from observation noise through to squad selection. This contrasts with standard approaches that decouple forecasting from optimization and discard uncertainty at the interface.
 
 References: Matthews et al. (AAAI 2012), Tamimi & Tran (IJCSS 2025), Ramezani (arXiv 2025), Brill et al. (arXiv 2024).
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE).
-
-## Author
-
-**Felix Hirwa Nshuti** — [hirwanshutiflx@gmail.com](mailto:hirwanshutiflx@gmail.com) — [@fnhirwa](https://github.com/fnhirwa)
