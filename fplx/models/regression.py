@@ -7,7 +7,7 @@ import pandas as pd
 
 try:
     from lightgbm import LGBMRegressor
-    from sklearn.linear_model import Lasso, LinearRegression, Ridge
+    from sklearn.linear_model import Lasso, Ridge
     from sklearn.metrics import mean_squared_error
     from xgboost import XGBRegressor
 
@@ -71,9 +71,8 @@ class RegressionModel(BaseModel):
         # Ensure the prediction data has the same columns as the training data
         if self.feature_names_:
             X_pred = X.reindex(columns=self.feature_names_, fill_value=0)
-        else:
-            X_pred = X
-        return self.model.predict(X_pred)
+            return self.model.predict(X_pred)
+        return self.model.predict(X)
 
     def _create_model(self, model_type: str, **kwargs):
         """Create the underlying model."""
@@ -103,9 +102,7 @@ class RegressionModel(BaseModel):
         logger.warning(f"Unknown model type {model_type}, using Ridge")
         return Ridge(alpha=1.0)
 
-    def fit_predict(
-        self, y: pd.Series, X: pd.DataFrame, verbose: bool = False
-    ) -> pd.Series:
+    def fit_predict(self, y: pd.Series, X: pd.DataFrame, verbose: bool = False) -> pd.Series:
         """
         Fit model and generate predictions using rolling CV.
 
@@ -163,12 +160,7 @@ class RegressionModel(BaseModel):
                 rmse = np.sqrt(mean_squared_error(y_test[valid_test], y_pred))
                 logger.info(f"Fold {fold}: RMSE = {rmse:.3f}")
 
-        # Create prediction series
-        pred_series = pd.Series(
-            self.predictions, index=pred_indices, name="predicted_points"
-        )
-
-        return pred_series
+        return pd.Series(self.predictions, index=pred_indices, name="predicted_points")
 
     def predict_next(self, X: pd.DataFrame) -> float:
         """
@@ -211,11 +203,10 @@ class RegressionModel(BaseModel):
         """
         if self.model_type in ["xgboost", "lightgbm"]:
             importance = self.model.feature_importances_
-            df = pd.DataFrame({
+            return pd.DataFrame({
                 "feature": feature_names,
                 "importance": importance,
             }).sort_values("importance", ascending=False)
-            return df
         logger.warning("Feature importance only available for tree-based models")
         return pd.DataFrame()
 

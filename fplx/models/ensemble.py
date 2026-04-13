@@ -1,7 +1,7 @@
 """Ensemble models combining multiple predictors."""
 
 import logging
-from typing import Dict, List, Optional
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -15,13 +15,13 @@ class EnsembleModel:
 
     Parameters
     ----------
-    models : List
+    models : list
         List of model instances
-    weights : Optional[List[float]]
+    weights : Optional[list[float]]
         Weights for each model (must sum to 1)
     """
 
-    def __init__(self, models: List, weights: Optional[List[float]] = None):
+    def __init__(self, models: list, weights: Optional[list[float]] = None):
         self.models = models
 
         if weights is None:
@@ -62,7 +62,7 @@ class EnsembleModel:
         ensemble_pred = sum(p * w for p, w in zip(predictions, self.weights))
         return max(0, ensemble_pred)
 
-    def batch_predict(self, players_data: Dict[str, pd.DataFrame]) -> Dict[str, float]:
+    def batch_predict(self, players_data: dict[str, pd.DataFrame]) -> dict[str, float]:
         """
         Ensemble predictions for multiple players.
 
@@ -85,11 +85,9 @@ class EnsembleModel:
 
 
 class AdaptiveEnsemble(EnsembleModel):
-    """
-    Adaptive ensemble that adjusts weights based on recent performance.
-    """
+    """Adaptive ensemble that adjusts weights based on recent performance."""
 
-    def __init__(self, models: List, learning_rate: float = 0.1):
+    def __init__(self, models: list, learning_rate: float = 0.1):
         super().__init__(models)
         self.learning_rate = learning_rate
         self.model_errors = [[] for _ in models]
