@@ -8,14 +8,14 @@ import numpy as np
 import pandas as pd
 
 from fplx.core.player import Player
-from fplx.core.squad import Squad
+from fplx.core.squad import FullSquad
 from fplx.data.loaders import FPLDataLoader
 from fplx.data.news_collector import NewsCollector
 from fplx.inference.pipeline import PlayerInferencePipeline
 from fplx.models.baseline import BaselineModel, FormBasedModel
 from fplx.models.ensemble import EnsembleModel
 from fplx.models.regression import RegressionModel
-from fplx.selection.optimizer import GreedyOptimizer, ILPOptimizer
+from fplx.selection.optimizer import GreedyOptimizer, TwoLevelILPOptimizer
 from fplx.signals.fixtures import FixtureSignal
 from fplx.signals.news import NewsSignal
 from fplx.signals.stats import StatsSignal
@@ -151,11 +151,13 @@ class FPLModel:
         optimizer_type = self.config.get("optimizer", "greedy")
         optimizer_config = self.config.get("optimizer_config", {})
         optimizer_config["budget"] = self.budget
+        risk_aversion = self.config.get("risk_aversion", 0.0)
 
         if optimizer_type == "greedy":
             return GreedyOptimizer(**optimizer_config)
         if optimizer_type == "ilp":
-            return ILPOptimizer(**optimizer_config)
+            optimizer_config["risk_aversion"] = risk_aversion
+            return TwoLevelILPOptimizer(**optimizer_config)
         logger.warning(f"Unknown optimizer {optimizer_type}, using greedy.")
         return GreedyOptimizer(**optimizer_config)
 
@@ -316,24 +318,24 @@ class FPLModel:
 
         self.expected_points = all_expected_points
 
-    def select_best_11(self) -> Squad:
+    def select_best_11(self) -> FullSquad:
         """
-        Select the optimal 11-player squad.
+        Select the optimal 15-player squad and 11-player starting lineup.
 
         Returns
         -------
-        Squad
-            The optimized squad.
+        FullSquad
+            The optimized squad with lineup.
         """
         if not self.expected_points:
             raise RuntimeError("Model not fitted. Call fit() first.")
 
-        logger.info("Optimizing squad with %s optimizer...", self.config.get('optimizer', 'greedy'))
+        logger.info("Optimizing squad with %s optimizer...", self.config.get("optimizer", "greedy"))
 
         squad = self.optimizer.solve(
             players=self.players,
             expected_points=self.expected_points,
-            formation=self.formation,
+            expected_variance=self.expected_variance or None,
         )
 
         logger.info("Squad optimization complete.")
