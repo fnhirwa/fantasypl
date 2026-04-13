@@ -90,6 +90,45 @@ class KalmanFilter:
         self._process_noise_overrides.clear()
         self._observation_noise_overrides.clear()
 
+    def get_process_noise_override(self, timestep: int) -> Optional[float]:
+        """Return explicit process noise override at timestep, if any."""
+        return self._process_noise_overrides.get(timestep)
+
+    def set_noise_overrides(
+        self,
+        process_noise_overrides: dict[int, float],
+        observation_noise_overrides: dict[int, float],
+    ):
+        """Replace per-timestep noise overrides."""
+        self._process_noise_overrides = dict(process_noise_overrides)
+        self._observation_noise_overrides = dict(observation_noise_overrides)
+
+    def copy_with_overrides(self, max_timestep: Optional[int] = None) -> "KalmanFilter":
+        """Create a parameter-identical filter with copied noise overrides.
+
+        Parameters
+        ----------
+        max_timestep : int, optional
+            If provided, only overrides for timesteps <= max_timestep are copied.
+        """
+        copied = KalmanFilter(
+            process_noise=self.default_process_noise,
+            observation_noise=self.default_observation_noise,
+            initial_state_mean=self.initial_state_mean,
+            initial_state_covariance=self.initial_state_covariance,
+        )
+
+        if max_timestep is None:
+            proc = dict(self._process_noise_overrides)
+            obs = dict(self._observation_noise_overrides)
+        else:
+            proc = {k: v for k, v in self._process_noise_overrides.items() if k <= max_timestep}
+            obs = {k: v for k, v in self._observation_noise_overrides.items() if k <= max_timestep}
+
+        copied.set_noise_overrides(proc, obs)
+
+        return copied
+
     def _get_process_noise(self, timestep: int) -> float:
         return self._process_noise_overrides.get(timestep, self.default_process_noise)
 
@@ -146,27 +185,38 @@ class KalmanFilter:
 
     def predict_next(self) -> tuple[float, float]:
         """
-        Predict next timestep's point potential with uncertainty.
+        Predict next observation with uncertainty.
+
+        Returns the predictive distribution for Y_{t+1} (the observation),
+        not X_{t+1} (the latent state). This ensures consistency with the
+        HMM predict_next which also returns observation-level variance.
+
+        Var[Y_{t+1}] = Var[X_{t+1}|y_{1:t}] + R
+                     = (P_t + Q) + R
 
         Must call filter() first.
 
         Returns
         -------
-        predicted_state_mean : float
-            Predicted point potential E[X_{num_timesteps+1} | y_1:num_timesteps].
-        predicted_state_covariance : float
-            Prediction uncertainty Var[X_{num_timesteps+1} | y_1:num_timesteps].
+        predicted_mean : float
+            E[Y_{t+1} | y_{1:t}].
+        predicted_var : float
+            Var[Y_{t+1} | y_{1:t}] (observation-level, includes R).
         """
         if self.filtered_state_means is None or self.filtered_state_covariances is None:
             raise RuntimeError("Must call filter() before predict_next().")
 
         num_timesteps = len(self.filtered_state_means)
-        next_process_noise = self._get_process_noise(num_timesteps)  # process noise for next step
+        next_process_noise = self._get_process_noise(num_timesteps)
+        next_observation_noise = self._get_observation_noise(num_timesteps)
 
-        predicted_state_mean = self.filtered_state_means[-1]
-        predicted_state_covariance = self.filtered_state_covariances[-1] + next_process_noise
+        predicted_mean = self.filtered_state_means[-1]
+        # State-level: P_{t+1|t} = P_{t|t} + Q
+        state_var = self.filtered_state_covariances[-1] + next_process_noise
+        # Observation-level: Var[Y] = P_{t+1|t} + R
+        predicted_var = state_var + next_observation_noise
 
-        return predicted_state_mean, predicted_state_covariance
+        return predicted_mean, predicted_var
 
     def smooth(self, observations: np.ndarray):
         """

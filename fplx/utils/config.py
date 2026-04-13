@@ -35,6 +35,14 @@ class Config:
                 "form_trend": 0.2,
             },
         },
+        "inference": {
+            "hmm_variance_floor": 1.0,
+            "fusion_mode": "precision",
+            "fusion_params": {},
+            "hmm_params": {},
+            "kf_params": {},
+            "news_params": {},
+        },
     }
 
     def __init__(self, config: Optional[dict] = None):

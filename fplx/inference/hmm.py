@@ -311,7 +311,22 @@ class HMMInference:
         for iteration in range(n_iter):
             # E-step
             forward_messages, scale = self.forward(observations)
-            smoothed_posteriors = self.forward_backward(observations)
+
+            # Backward pass using the same scaling factors as forward()
+            backward_messages = np.zeros((num_timesteps, self.n_states))
+            backward_messages[num_timesteps - 1] = 1.0
+            for t in range(num_timesteps - 2, -1, -1):
+                transition_matrix_t_plus_1 = self._get_transition_matrix(t + 1)
+                b_next = self._emission_vector(observations[t + 1])
+                backward_messages[t] = transition_matrix_t_plus_1 @ (b_next * backward_messages[t + 1])
+                if scale[t + 1] > 0:
+                    backward_messages[t] /= scale[t + 1]
+
+            # gamma_t(i) = P(S_t=i | y_1:T)
+            smoothed_posteriors = forward_messages * backward_messages
+            row_sums = smoothed_posteriors.sum(axis=1, keepdims=True)
+            row_sums[row_sums == 0] = 1.0
+            smoothed_posteriors /= row_sums
 
             # transition_posteriors: P(S_t=i, S_{t+1}=j | y_1:num_timesteps) for transition re-estimation
             transition_posteriors = np.zeros((num_timesteps - 1, self.n_states, self.n_states))
@@ -319,12 +334,14 @@ class HMMInference:
                 transition_matrix_t_plus_1 = self._get_transition_matrix(t + 1)
                 b_next = self._emission_vector(observations[t + 1])
 
-                # Beta from backward (recompute minimal)
-                # Use smoothed_posteriors and forward_messages to derive transition_posteriors directly
+                # xi_t(i,j) = P(S_t=i, S_{t+1}=j | y_1:T)
                 for i in range(self.n_states):
                     for j in range(self.n_states):
                         transition_posteriors[t, i, j] = (
-                            forward_messages[t, i] * transition_matrix_t_plus_1[i, j] * b_next[j]
+                            forward_messages[t, i]
+                            * transition_matrix_t_plus_1[i, j]
+                            * b_next[j]
+                            * backward_messages[t + 1, j]
                         )
 
                 xi_sum = transition_posteriors[t].sum()

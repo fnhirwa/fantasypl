@@ -280,6 +280,81 @@ def test_baum_welch_learning():
     print("  PASSED\n")
 
 
+def test_custom_news_params_override_defaults():
+    """Test configurable news thresholds/perturbations are applied by pipeline."""
+    print("=" * 60)
+    print("TEST 7: Configurable News Injection Parameters")
+    print("=" * 60)
+
+    # Override thresholds so availability=0.30 is treated as unavailable
+    # and use a custom Kalman shock to verify map override is active.
+    news_params = {
+        "classification_thresholds": {
+            "unavailable_max_availability": 0.35,
+        },
+        "perturbation_map": {
+            "unavailable": {
+                "state_boost": {0: 6.0},
+                "kalman_shock": 4.0,
+            },
+        },
+    }
+
+    pipeline = PlayerInferencePipeline(news_params=news_params)
+    observations = np.array([4.0, 5.0, 4.0, 3.0, 4.5], dtype=float)
+    pipeline.ingest_observations(observations)
+
+    signal = {"availability": 0.30, "minutes_risk": 0.0, "confidence": 1.0}
+    category = _classify_news(
+        signal["availability"],
+        signal["minutes_risk"],
+        pipeline.news_params["classification_thresholds"],
+    )
+    assert category == "unavailable"
+
+    pipeline.inject_news(signal, timestep=4)
+
+    expected_q = pipeline.kf.default_process_noise * 4.0
+    actual_q = pipeline.kf.get_process_noise_override(4)
+    print(f"  Custom category: {category}")
+    print(f"  Process shock override at t=4: {actual_q:.2f} (expected {expected_q:.2f})")
+
+    assert actual_q == expected_q
+
+    print("  PASSED\n")
+
+
+def test_calibrated_alpha_fusion_mode_runs():
+    """Calibrated alpha fusion should return a valid alpha and prediction."""
+    print("=" * 60)
+    print("TEST 8: Calibrated Alpha Fusion")
+    print("=" * 60)
+
+    _, observations = generate_test_player()
+
+    pipeline = PlayerInferencePipeline(
+        fusion_mode="calibrated_alpha",
+        fusion_params={
+            "grid_step": 0.1,
+            "min_history": 6,
+            "default_alpha": 0.7,
+        },
+    )
+    pipeline.ingest_observations(observations)
+    result = pipeline.run()
+    ep, var = pipeline.predict_next()
+
+    assert result.fusion_alpha is not None
+    assert 0.0 <= result.fusion_alpha <= 1.0
+    assert np.isfinite(ep)
+    assert np.isfinite(var)
+    assert var > 0
+
+    print(f"  Learned alpha: {result.fusion_alpha:.2f}")
+    print(f"  Predicted E[P] = {ep:.2f}, Var = {var:.2f}")
+    print("  PASSED\n")
+
+
 def main():
     test_news_signal_integration()
     test_pipeline_without_signals()
@@ -287,6 +362,8 @@ def main():
     test_fixture_injection_shifts_uncertainty()
     test_full_pipeline_with_all_signals()
     test_baum_welch_learning()
+    test_custom_news_params_override_defaults()
+    test_calibrated_alpha_fusion_mode_runs()
 
     print("=" * 60)
     print("ALL TESTS PASSED")

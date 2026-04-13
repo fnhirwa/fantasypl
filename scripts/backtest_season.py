@@ -25,6 +25,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -36,6 +37,7 @@ from fplx.data.vaastav_loader import VaastavLoader
 from fplx.evaluation.metrics import InferenceMetrics, OptimizationMetrics
 from fplx.inference.pipeline import PlayerInferencePipeline
 from fplx.selection.optimizer import GreedyOptimizer, TwoLevelILPOptimizer
+from fplx.utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,10 @@ def run_backtest(
     start_gw: int = 6,
     end_gw: int = 38,
     risk_lambdas: list[float] | None = None,
+    enable_hmm_learning: bool = False,
+    fusion_mode: str = "calibrated_alpha",
+    fusion_params: dict | None = None,
+    hmm_variance_floor: float = 1.0,
 ) -> dict:
     """
     Run the full-season backtest.
@@ -107,6 +113,16 @@ def run_backtest(
         Last gameweek.
     risk_lambdas : list[float]
         Risk aversion values to test.
+    enable_hmm_learning : bool
+        If True, run per-player HMM Baum-Welch before inference. Disabled by
+        default to avoid overfitting/unstable per-player EM on short histories.
+    fusion_mode : str
+        Fusion mode for combining HMM and Kalman outputs.
+        Options: 'precision' or 'calibrated_alpha'.
+    fusion_params : dict, optional
+        Optional parameters for fusion mode (e.g., alpha grid settings).
+    hmm_variance_floor : float
+        Floor applied to HMM variance before fusion.
 
     Returns
     -------
@@ -115,6 +131,7 @@ def run_backtest(
     """
     if risk_lambdas is None:
         risk_lambdas = [0.0, 0.5, 1.0]
+    fusion_params = fusion_params or {}
 
     loader = VaastavLoader(season=season, data_dir=data_dir)
     inf_metrics = InferenceMetrics()
@@ -164,16 +181,33 @@ def run_backtest(
 
             # Inference pipeline
             try:
-                pipeline = PlayerInferencePipeline()
+                pipeline = PlayerInferencePipeline(
+                    hmm_variance_floor=hmm_variance_floor,
+                    fusion_mode=fusion_mode,
+                    fusion_params=fusion_params if fusion_params else None,
+                )
                 pipeline.ingest_observations(pts_history)
-                pipeline.run()
+
+                # Optional: per-player HMM parameter learning.
+                # Kept off by default because short noisy histories can make
+                # HMM uncertainty overconfident and hurt fused forecasts.
+                if enable_hmm_learning and len(pts_history) >= 10:
+                    pipeline.learn_parameters(n_iter=10)
+
+                result = pipeline.run()
                 mu, var = pipeline.predict_next()
                 ep_fused[p.id] = mu
                 var_fused[p.id] = var
+
+                # Ablation: individual model predictions
+                hmm_mu = result.hmm_predicted_mean
+                kf_mu = result.kf_predicted_mean
             except Exception as e:
                 logger.debug("Inference failed for %s: %s", p.name, e)
                 ep_fused[p.id] = ep_rolling[p.id]
                 var_fused[p.id] = 4.0  # default variance
+                hmm_mu = ep_rolling[p.id]
+                kf_mu = ep_rolling[p.id]
 
             # Collect inference metrics
             actual = actual_points_gw.get(p.id, 0.0)
@@ -184,6 +218,8 @@ def run_backtest(
                 model_preds={
                     "rolling_avg": ep_rolling[p.id],
                     "ewma": ep_ewma[p.id],
+                    "hmm_only": hmm_mu,
+                    "kf_only": kf_mu,
                     "hmm_kf_fused": ep_fused[p.id],
                 },
             )
@@ -235,34 +271,111 @@ def run_backtest(
 
 
 def main():
+    def resolve(cli_value: Any, cfg_value: Any, default: Any) -> Any:
+        if cli_value is not None:
+            return cli_value
+        if cfg_value is not None:
+            return cfg_value
+        return default
+
     parser = argparse.ArgumentParser(description="FPLX full-season backtest")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to JSON config file (CLI flags override config values)",
+    )
     parser.add_argument(
         "--data-dir",
         default=None,
         help="Path to local Fantasy-Premier-League clone (optional; fetches from GitHub if omitted)",
     )
-    parser.add_argument("--season", default="2023-24")
-    parser.add_argument("--start-gw", type=int, default=6)
-    parser.add_argument("--end-gw", type=int, default=38)
-    parser.add_argument("--output", default="results/backtest.json")
+    parser.add_argument("--season", default=None)
+    parser.add_argument("--start-gw", type=int, default=None)
+    parser.add_argument("--end-gw", type=int, default=None)
+    parser.add_argument("--output", default=None)
+    parser.add_argument(
+        "--enable-hmm-learning",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable per-player HMM Baum-Welch learning",
+    )
+    parser.add_argument(
+        "--fusion-mode",
+        default=None,
+        choices=["precision", "calibrated_alpha"],
+        help="Fusion strategy for combining HMM and Kalman predictions",
+    )
+    parser.add_argument(
+        "--fusion-alpha-grid-step",
+        type=float,
+        default=None,
+        help="Grid step for calibrated alpha search",
+    )
+    parser.add_argument(
+        "--fusion-alpha-default",
+        type=float,
+        default=None,
+        help="Fallback alpha when there is insufficient history",
+    )
+    parser.add_argument(
+        "--fusion-alpha-min-history",
+        type=int,
+        default=None,
+        help="Minimum history length before alpha calibration",
+    )
+    parser.add_argument(
+        "--hmm-variance-floor",
+        type=float,
+        default=None,
+        help="Floor applied to HMM variance before fusion",
+    )
     parser.add_argument("--verbose", action="store_true")
 
     args = parser.parse_args()
+
+    cfg_dict = {}
+    if args.config:
+        cfg = Config()
+        cfg.load_from_file(Path(args.config))
+        cfg_dict = cfg.to_dict()
+
+    inference_cfg = cfg_dict.get("inference", {})
+    fusion_cfg = inference_cfg.get("fusion_params", {})
+
+    season = resolve(args.season, cfg_dict.get("season"), "2023-24")
+    data_dir = resolve(args.data_dir, cfg_dict.get("data_dir"), None)
+    start_gw = int(resolve(args.start_gw, cfg_dict.get("start_gw"), 6))
+    end_gw = int(resolve(args.end_gw, cfg_dict.get("end_gw"), 38))
+    output = resolve(args.output, cfg_dict.get("output"), "results/backtest.json")
+    enable_hmm_learning = bool(
+        resolve(args.enable_hmm_learning, inference_cfg.get("enable_hmm_learning"), False)
+    )
+    fusion_mode = resolve(args.fusion_mode, inference_cfg.get("fusion_mode"), "calibrated_alpha")
+    hmm_variance_floor = float(resolve(args.hmm_variance_floor, inference_cfg.get("hmm_variance_floor"), 1.0))
+    fusion_params = {
+        "grid_step": float(resolve(args.fusion_alpha_grid_step, fusion_cfg.get("grid_step"), 0.05)),
+        "default_alpha": float(resolve(args.fusion_alpha_default, fusion_cfg.get("default_alpha"), 0.7)),
+        "min_history": int(resolve(args.fusion_alpha_min_history, fusion_cfg.get("min_history"), 8)),
+    }
 
     level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=level, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
     results = run_backtest(
-        season=args.season,
-        data_dir=args.data_dir,
-        start_gw=args.start_gw,
-        end_gw=args.end_gw,
+        season=season,
+        data_dir=data_dir,
+        start_gw=start_gw,
+        end_gw=end_gw,
+        enable_hmm_learning=enable_hmm_learning,
+        fusion_mode=fusion_mode,
+        fusion_params=fusion_params,
+        hmm_variance_floor=hmm_variance_floor,
     )
 
     # Save
-    out_path = Path(args.output)
+    out_path = Path(output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, default=str)
 
     # Print summary
@@ -293,7 +406,7 @@ def main():
         print(f"    Optimality Gap:   {s['mean_optimality_gap']:.1%}")
         print(f"    %% of Oracle:      {s['pct_of_oracle']:.1f}%%")
 
-    print(f"\nResults saved to: {args.output}")
+    print(f"\nResults saved to: {output}")
 
 
 if __name__ == "__main__":

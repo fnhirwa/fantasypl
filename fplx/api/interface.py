@@ -235,6 +235,10 @@ class FPLModel:
 
         hmm_params = self.config.get("inference.hmm_params", {})
         kf_params = self.config.get("inference.kf_params", {})
+        news_params = self.config.get("inference.news_params", {})
+        hmm_variance_floor = self.config.get("inference.hmm_variance_floor", 1.0)
+        fusion_mode = self.config.get("inference.fusion_mode", "precision")
+        fusion_params = self.config.get("inference.fusion_params", {})
 
         for player in self.players:
             # 1. Extract points history
@@ -253,8 +257,16 @@ class FPLModel:
             pipeline = PlayerInferencePipeline(
                 hmm_params=hmm_params if hmm_params else None,
                 kf_params=kf_params if kf_params else None,
+                hmm_variance_floor=hmm_variance_floor,
+                news_params=news_params if news_params else None,
+                fusion_mode=fusion_mode,
+                fusion_params=fusion_params if fusion_params else None,
             )
             pipeline.ingest_observations(points)
+
+            # 2b. Learn HMM parameters from this player's history
+            if len(points) >= 10:
+                pipeline.learn_parameters(n_iter=10)
 
             # 3. Inject news signal at current gameweek
             snapshot = self.news_collector.get_player_news(player.id, self.current_gameweek)

@@ -16,8 +16,10 @@ Dataset: https://github.com/vaastav/Fantasy-Premier-League
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Optional
+from urllib.error import HTTPError
 
 import pandas as pd
 
@@ -73,7 +75,7 @@ class VaastavLoader:
         data_dir: Optional[str | Path] = None,
         cache_dir: Optional[str | Path] = None,
     ):
-        self.season = season
+        self.season = self._validate_season(season)
         self.data_dir = Path(data_dir) if data_dir else None
         # Default cache is project-local to keep artifacts within the workspace.
         project_root = Path(__file__).resolve().parents[2]
@@ -82,6 +84,26 @@ class VaastavLoader:
 
         self._merged_gw: Optional[pd.DataFrame] = None
         self._player_raw: Optional[pd.DataFrame] = None
+
+    @staticmethod
+    def _validate_season(season: str) -> str:
+        """Validate season format and year consistency (e.g. 2024-25)."""
+        m = re.fullmatch(r"(\d{4})-(\d{2})", season.strip())
+        if not m:
+            raise ValueError(f"Invalid season '{season}'. Expected format YYYY-YY, for example 2024-25.")
+
+        start_year = int(m.group(1))
+        end_suffix = int(m.group(2))
+        expected_suffix = (start_year + 1) % 100
+
+        if end_suffix != expected_suffix:
+            corrected = f"{start_year}-{expected_suffix:02d}"
+            raise ValueError(
+                f"Invalid season '{season}'. End year suffix should be {expected_suffix:02d} "
+                f"for start year {start_year}. Did you mean '{corrected}'?"
+            )
+
+        return season.strip()
 
     @staticmethod
     def _coalesce_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -129,7 +151,16 @@ class VaastavLoader:
         # 3. Fetch from GitHub
         url = f"{BASE_URL}/{self.season}/{relative_path}"
         logger.info("Fetching %s", url)
-        df = pd.read_csv(url, encoding="utf-8-sig")
+        try:
+            df = pd.read_csv(url, encoding="utf-8-sig")
+        except HTTPError as e:
+            if e.code == 404:
+                raise FileNotFoundError(
+                    f"Season data not found for '{self.season}' at {url}. "
+                    "Check the season string (e.g. 2024-25) or provide a local --data-dir "
+                    "with matching data/<season>/ files."
+                ) from e
+            raise
 
         # Cache for next time
         df.to_csv(cache_file, index=False)
