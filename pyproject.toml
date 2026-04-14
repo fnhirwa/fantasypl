@@ -47,7 +47,9 @@ optimization = [
     "pulp>=2.6.0",
 ]
 deep = [
-    "torch>=1.10.0",
+    "torch>=2.0.0",
+    "lightning>=2.0.0",
+    "pytorch-forecasting>=1.0.0",
 ]
 dev = [
     "pytest-randomly",

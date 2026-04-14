@@ -48,6 +48,10 @@ class Config:
                 "lookback": 8,
                 "min_history": 3,
             },
+            "tft_params": {
+                "checkpoint": None,
+                "encoder_length": 15,
+            },
         },
     }
 

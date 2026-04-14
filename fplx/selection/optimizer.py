@@ -74,6 +74,7 @@ class TwoLevelILPOptimizer(BaseOptimizer):
         players: list[Player],
         expected_points: dict[int, float],
         expected_variance: Optional[dict[int, float]] = None,
+        downside_risk: Optional[dict[int, float]] = None,
         relax: bool = False,
     ):
         """
@@ -86,7 +87,10 @@ class TwoLevelILPOptimizer(BaseOptimizer):
         expected_points : dict[int, float]
             E[P_i] per player.
         expected_variance : dict[int, float], optional
-            Var[P_i] per player. Required if risk_aversion > 0.
+            Var[P_i] per player. Used for risk penalty if downside_risk is not provided.
+        downside_risk : dict[int, float], optional
+            Downside spread per player (for example q50 - q10 from quantile models).
+            If provided and risk_aversion > 0, this is used instead of variance.
         relax : bool
             If True, use continuous variables [0,1] (LP relaxation).
 
@@ -111,9 +115,13 @@ class TwoLevelILPOptimizer(BaseOptimizer):
         for p in players:
             ep = expected_points.get(p.id, 0.0)
             penalty = 0.0
-            if self.risk_aversion > 0 and expected_variance:
-                var_i = expected_variance.get(p.id, 0.0)
-                penalty = self.risk_aversion * np.sqrt(max(var_i, 0.0))
+            if self.risk_aversion > 0:
+                if downside_risk is not None:
+                    dr_i = downside_risk.get(p.id, 0.0)
+                    penalty = self.risk_aversion * max(float(dr_i), 0.0)
+                elif expected_variance:
+                    var_i = expected_variance.get(p.id, 0.0)
+                    penalty = self.risk_aversion * np.sqrt(max(var_i, 0.0))
             obj_coeffs[p.id] = ep - penalty
 
         prob += pulp.lpSum([obj_coeffs[p.id] * x_vars[p.id] for p in players])
@@ -173,6 +181,7 @@ class TwoLevelILPOptimizer(BaseOptimizer):
         players: list[Player],
         expected_points: dict[int, float],
         expected_variance: Optional[dict[int, float]] = None,
+        downside_risk: Optional[dict[int, float]] = None,
         formation: Optional[str] = None,
     ) -> FullSquad:
         """
@@ -186,6 +195,9 @@ class TwoLevelILPOptimizer(BaseOptimizer):
             E[P_i] per player.
         expected_variance : dict[int, float], optional
             Var[P_i] per player.
+        downside_risk : dict[int, float], optional
+            Downside spread per player. If provided, risk penalty uses this
+            directly (instead of sqrt(variance)).
         formation : Optional[str]
             Not used (formation is optimized automatically).
 
@@ -196,7 +208,13 @@ class TwoLevelILPOptimizer(BaseOptimizer):
         import time
 
         start = time.perf_counter()
-        prob, s_vars, x_vars = self._build_problem(players, expected_points, expected_variance, relax=False)
+        prob, s_vars, x_vars = self._build_problem(
+            players,
+            expected_points,
+            expected_variance,
+            downside_risk,
+            relax=False,
+        )
         prob.solve(self.pulp.PULP_CBC_CMD(msg=0))
         elapsed = time.perf_counter() - start
 
@@ -241,6 +259,7 @@ class TwoLevelILPOptimizer(BaseOptimizer):
         players: list[Player],
         expected_points: dict[int, float],
         expected_variance: Optional[dict[int, float]] = None,
+        downside_risk: Optional[dict[int, float]] = None,
     ) -> OptimizationResult:
         """
         Solve the LP relaxation and extract shadow prices.
@@ -253,7 +272,13 @@ class TwoLevelILPOptimizer(BaseOptimizer):
         import time
 
         start = time.perf_counter()
-        prob, s_vars, x_vars = self._build_problem(players, expected_points, expected_variance, relax=True)
+        prob, s_vars, x_vars = self._build_problem(
+            players,
+            expected_points,
+            expected_variance,
+            downside_risk,
+            relax=True,
+        )
         prob.solve(self.pulp.PULP_CBC_CMD(msg=0))
         elapsed = time.perf_counter() - start
 
@@ -275,7 +300,7 @@ class TwoLevelILPOptimizer(BaseOptimizer):
                 binding.append(name)
 
         # Also solve ILP to compute integrality gap
-        full_squad = self.optimize(players, expected_points, expected_variance)
+        full_squad = self.optimize(players, expected_points, expected_variance, downside_risk)
         ilp_obj = full_squad.lineup.expected_points
         gap = (lp_obj - ilp_obj) / lp_obj if lp_obj > 0 else 0.0
 

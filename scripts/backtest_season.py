@@ -38,6 +38,7 @@ from fplx.evaluation.metrics import InferenceMetrics, OptimizationMetrics
 from fplx.inference.enriched import compute_xpoints, enriched_predict
 from fplx.inference.multivariate_hmm import MultivariateHMM, build_feature_matrix
 from fplx.inference.pipeline import PlayerInferencePipeline
+from fplx.inference.tft import TFTForecaster
 from fplx.selection.lagrangian import LagrangianOptimizer
 from fplx.selection.optimizer import GreedyOptimizer, TwoLevelILPOptimizer
 from fplx.utils.config import Config
@@ -157,6 +158,8 @@ def run_backtest(
     mvhmm_n_iter: int = 15,
     mvhmm_form_lookback: int = 8,
     mvhmm_min_history: int = 3,
+    tft_checkpoint: str | None = None,
+    tft_encoder_length: int = 15,
 ) -> dict:
     """
     Run the full-season backtest.
@@ -191,6 +194,11 @@ def run_backtest(
         Number of most-recent gameweeks to use for MV-HMM form inference.
     mvhmm_min_history : int
         Minimum timesteps required to fit MV-HMM on the lookback window.
+    tft_checkpoint : str, optional
+        Path to trained TFT checkpoint. If provided, enables TFT quantile
+        forecasts as additional inference/optimization strategies.
+    tft_encoder_length : int
+        Encoder lookback window for TFT inference.
 
     Returns
     -------
@@ -204,6 +212,21 @@ def run_backtest(
     loader = VaastavLoader(season=season, data_dir=data_dir)
     inf_metrics = InferenceMetrics()
     opt_metrics = OptimizationMetrics()
+
+    tft_forecaster = None
+    tft_panel = None
+    if tft_checkpoint:
+        try:
+            from fplx.data.tft_dataset import build_tft_panel
+
+            tft_forecaster = TFTForecaster(encoder_length=tft_encoder_length, prediction_length=1)
+            tft_forecaster.load(tft_checkpoint)
+            tft_panel = build_tft_panel(loader.load_merged_gw())
+            logger.info("Loaded TFT checkpoint from %s", tft_checkpoint)
+        except Exception as e:
+            logger.warning("TFT disabled due to load/build error: %s", e)
+            tft_forecaster = None
+            tft_panel = None
 
     logger.info("Starting backtest: GW%d to GW%d", start_gw, end_gw)
 
@@ -241,10 +264,23 @@ def run_backtest(
         var_mvhmm = {}
         ep_blend = {}  # calibrated blend: enriched + MV-HMM
         var_blend = {}
+        ep_tft = {}  # TFT median q50 objective values
+        dr_tft = {}  # TFT downside spread q50-q10
         ep_fused = {}  # scalar HMM+KF on filtered points
         var_fused = {}
         ep_rolling = {}
         ep_ewma = {}
+
+        tft_pred = None
+        tft_expected: dict[int, float] = {}
+        tft_downside: dict[int, float] = {}
+        if tft_forecaster is not None and tft_panel is not None:
+            try:
+                tft_pred = tft_forecaster.predict_gameweek(tft_panel, target_gw=target_gw)
+                tft_expected, tft_downside = tft_pred.to_optimizer_inputs()
+            except Exception as e:
+                logger.warning("TFT predict failed at GW%d: %s", target_gw, e)
+                tft_pred = None
 
         for p in valid_players:
             pts_raw = p.timeseries["points"].values.astype(float)
@@ -329,6 +365,8 @@ def run_backtest(
 
             ep_blend[p.id] = max(0.0, blend_mu)
             var_blend[p.id] = max(1e-6, blend_var)
+            ep_tft[p.id] = max(0.0, float(tft_expected.get(p.id, ep_enriched[p.id])))
+            dr_tft[p.id] = max(0.0, float(tft_downside.get(p.id, 0.0)))
 
             # Scalar HMM+KF on filtered points (ablation)
             pts_played = filter_played(pts_raw, mins)
@@ -371,6 +409,7 @@ def run_backtest(
                     "mv_hmm": ep_mvhmm[p.id],
                     "enriched": ep_enriched[p.id],
                     "enriched_mvhmm_blend": ep_blend[p.id],
+                    "tft_q50": ep_tft[p.id],
                 },
             )
 
@@ -423,6 +462,19 @@ def run_backtest(
             strategy_actual_pts["ilp_ewma"] = _score(sq)
         except Exception as e:
             logger.warning("ILP ewma: %s", e)
+
+        # ILP + TFT median with downside-risk penalty
+        if tft_pred is not None:
+            for lam in risk_lambdas:
+                try:
+                    sq = TwoLevelILPOptimizer(budget=100.0, risk_aversion=lam).optimize(
+                        valid_players,
+                        ep_tft,
+                        downside_risk=dr_tft,
+                    )
+                    strategy_actual_pts[f"ilp_tft_{lam:.1f}"] = _score(sq)
+                except Exception as e:
+                    logger.warning("ILP tft lam=%.1f: %s", lam, e)
 
         # ILP + scalar fused (ablation)
         try:
@@ -549,6 +601,17 @@ def main():
         default=None,
         help="Minimum history required to fit MV-HMM",
     )
+    parser.add_argument(
+        "--tft-checkpoint",
+        default=None,
+        help="Path to trained TFT checkpoint for quantile inference",
+    )
+    parser.add_argument(
+        "--tft-encoder-length",
+        type=int,
+        default=None,
+        help="Encoder lookback used by TFT inference",
+    )
     parser.add_argument("--verbose", action="store_true")
 
     args = parser.parse_args()
@@ -562,6 +625,7 @@ def main():
     inference_cfg = cfg_dict.get("inference", {})
     fusion_cfg = inference_cfg.get("fusion_params", {})
     mvhmm_cfg = inference_cfg.get("mvhmm_params", {})
+    tft_cfg = inference_cfg.get("tft_params", {})
 
     season = resolve(args.season, cfg_dict.get("season"), "2023-24")
     data_dir = resolve(args.data_dir, cfg_dict.get("data_dir"), None)
@@ -577,6 +641,8 @@ def main():
     mvhmm_n_iter = int(resolve(args.mvhmm_n_iter, mvhmm_cfg.get("n_iter"), 15))
     mvhmm_form_lookback = int(resolve(args.mvhmm_lookback, mvhmm_cfg.get("lookback"), 8))
     mvhmm_min_history = int(resolve(args.mvhmm_min_history, mvhmm_cfg.get("min_history"), 3))
+    tft_checkpoint = resolve(args.tft_checkpoint, tft_cfg.get("checkpoint"), None)
+    tft_encoder_length = int(resolve(args.tft_encoder_length, tft_cfg.get("encoder_length"), 15))
     fusion_params = {
         "grid_step": float(resolve(args.fusion_alpha_grid_step, fusion_cfg.get("grid_step"), 0.05)),
         "default_alpha": float(resolve(args.fusion_alpha_default, fusion_cfg.get("default_alpha"), 0.7)),
@@ -599,6 +665,8 @@ def main():
         mvhmm_n_iter=mvhmm_n_iter,
         mvhmm_form_lookback=mvhmm_form_lookback,
         mvhmm_min_history=mvhmm_min_history,
+        tft_checkpoint=tft_checkpoint,
+        tft_encoder_length=tft_encoder_length,
     )
 
     # Save

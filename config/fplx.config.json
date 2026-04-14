@@ -35,6 +35,10 @@
       "lookback": 6,
       "min_history": 3
     },
+    "tft_params": {
+      "checkpoint": null,
+      "encoder_length": 15
+    },
     "news_params": {
       "classification_thresholds": {
         "unavailable_max_availability": 0.1,
