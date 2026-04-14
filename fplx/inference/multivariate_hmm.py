@@ -20,17 +20,22 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from fplx.inference.enriched import compute_xpoints
+
 logger = logging.getLogger(__name__)
 
 STATE_NAMES = ["Injured", "Slump", "Average", "Good", "Star"]
 N_STATES = 5
 
-# Position-specific feature definitions
+# Domain-specific projection to reduce sample complexity.
+# We compress rich features into:
+#   xPts: structurally scored expected points from enriched.compute_xpoints
+#   mins_frac: availability/playing-time signal to separate Injured state
 POSITION_FEATURES = {
-    "GK": ["saves_per90", "xGC_per90", "clean_sheet", "bonus", "mins_frac"],
-    "DEF": ["xG", "xA", "xGC_per90", "clean_sheet", "influence_norm", "bonus", "mins_frac"],
-    "MID": ["xG", "xA", "creativity_norm", "threat_norm", "bonus", "mins_frac"],
-    "FWD": ["xG", "xA", "threat_norm", "bonus", "mins_frac"],
+    "GK": ["xPts", "mins_frac"],
+    "DEF": ["xPts", "mins_frac"],
+    "MID": ["xPts", "mins_frac"],
+    "FWD": ["xPts", "mins_frac"],
 }
 
 # FPL scoring rules
@@ -45,56 +50,27 @@ ASSIST_PTS = 3
 
 
 def _default_emissions(position: str) -> tuple[np.ndarray, np.ndarray]:
-    """Generate default emission means and vars for a position."""
-    n_feat = len(POSITION_FEATURES[position])
-    # All-zeros for Injured state
-    means = np.zeros((N_STATES, n_feat))
-    vars_ = np.full((N_STATES, n_feat), 0.01)
+    """Generate default 2D emission means and vars [xPts, mins_frac]."""
+    # Position-aware expected-points ladder while keeping the same latent semantics.
+    star_anchor = {"GK": 6.8, "DEF": 6.5, "MID": 7.5, "FWD": 7.2}.get(position, 7.0)
 
-    if position == "GK":
-        # [saves_per90, xGC_per90, cs, bonus, mins]
-        means[1] = [2.0, 1.5, 0.15, 0.2, 0.75]  # Slump
-        means[2] = [3.0, 1.2, 0.30, 0.5, 0.95]  # Average
-        means[3] = [3.5, 0.8, 0.45, 1.2, 1.00]  # Good
-        means[4] = [4.5, 0.5, 0.55, 2.0, 1.00]  # Star
-        vars_[0] = [0.01, 0.01, 0.01, 0.01, 0.001]
-        vars_[1] = [1.0, 0.5, 0.10, 0.3, 0.05]
-        vars_[2] = [1.5, 0.4, 0.15, 0.5, 0.02]
-        vars_[3] = [1.5, 0.3, 0.15, 0.8, 0.01]
-        vars_[4] = [2.0, 0.2, 0.15, 1.0, 0.005]
-    elif position == "DEF":
-        # [xG, xA, xGC_per90, cs, influence_norm, bonus, mins]
-        means[1] = [0.02, 0.02, 1.5, 0.15, 0.15, 0.2, 0.75]
-        means[2] = [0.04, 0.05, 1.2, 0.30, 0.25, 0.5, 0.95]
-        means[3] = [0.08, 0.08, 0.8, 0.40, 0.40, 1.0, 1.00]
-        means[4] = [0.15, 0.12, 0.5, 0.50, 0.55, 1.8, 1.00]
-        vars_[0] = [0.001] * 7
-        vars_[1] = [0.005, 0.005, 0.5, 0.10, 0.05, 0.3, 0.05]
-        vars_[2] = [0.010, 0.008, 0.4, 0.15, 0.08, 0.5, 0.02]
-        vars_[3] = [0.020, 0.015, 0.3, 0.15, 0.10, 0.8, 0.01]
-        vars_[4] = [0.040, 0.025, 0.2, 0.15, 0.12, 1.0, 0.005]
-    elif position == "MID":
-        # [xG, xA, creativity_norm, threat_norm, bonus, mins]
-        means[1] = [0.05, 0.03, 0.10, 0.10, 0.2, 0.75]
-        means[2] = [0.15, 0.10, 0.25, 0.25, 0.5, 0.95]
-        means[3] = [0.30, 0.18, 0.40, 0.40, 1.2, 1.00]
-        means[4] = [0.55, 0.28, 0.60, 0.60, 2.0, 1.00]
-        vars_[0] = [0.001] * 6
-        vars_[1] = [0.010, 0.005, 0.05, 0.05, 0.3, 0.05]
-        vars_[2] = [0.020, 0.012, 0.08, 0.08, 0.5, 0.02]
-        vars_[3] = [0.050, 0.025, 0.10, 0.10, 0.8, 0.01]
-        vars_[4] = [0.100, 0.050, 0.12, 0.12, 1.0, 0.005]
-    else:  # FWD
-        # [xG, xA, threat_norm, bonus, mins]
-        means[1] = [0.08, 0.03, 0.15, 0.2, 0.75]
-        means[2] = [0.25, 0.08, 0.35, 0.5, 0.95]
-        means[3] = [0.45, 0.15, 0.55, 1.2, 1.00]
-        means[4] = [0.75, 0.25, 0.75, 2.0, 1.00]
-        vars_[0] = [0.001] * 5
-        vars_[1] = [0.015, 0.005, 0.08, 0.3, 0.05]
-        vars_[2] = [0.040, 0.012, 0.10, 0.5, 0.02]
-        vars_[3] = [0.080, 0.025, 0.12, 0.8, 0.01]
-        vars_[4] = [0.150, 0.050, 0.15, 1.0, 0.005]
+    means = np.zeros((N_STATES, 2))
+    vars_ = np.full((N_STATES, 2), 0.01)
+
+    # Injured
+    means[0] = [0.0, 0.0]
+    vars_[0] = [0.05, 0.001]
+
+    # Slump, Average, Good, Star
+    means[1] = [0.25 * star_anchor, 0.75]
+    means[2] = [0.45 * star_anchor, 0.95]
+    means[3] = [0.68 * star_anchor, 1.00]
+    means[4] = [1.00 * star_anchor, 1.00]
+
+    vars_[1] = [0.8, 0.05]
+    vars_[2] = [1.2, 0.02]
+    vars_[3] = [1.8, 0.01]
+    vars_[4] = [2.4, 0.005]
 
     return means, vars_
 
@@ -131,40 +107,13 @@ def build_feature_matrix(timeseries: pd.DataFrame, position: str) -> np.ndarray:
     np.ndarray, shape (T, D) where D depends on position.
     """
     n = len(timeseries)
-    feat_names = POSITION_FEATURES.get(position, POSITION_FEATURES["MID"])
-    D = len(feat_names)
-    features = np.zeros((n, D))
+    features = np.zeros((n, 2))
 
     mins = _safe_col(timeseries, "minutes")
-    mins_frac = np.clip(mins / 90.0, 0, 1)
+    features[:, 1] = np.clip(mins / 90.0, 0.0, 1.0)  # mins_frac
 
-    for i, fname in enumerate(feat_names):
-        if fname == "mins_frac":
-            features[:, i] = mins_frac
-        elif fname == "xG":
-            features[:, i] = _safe_col(timeseries, "xG")
-        elif fname == "xA":
-            features[:, i] = _safe_col(timeseries, "xA")
-        elif fname == "bonus":
-            features[:, i] = _safe_col(timeseries, "bonus")
-        elif fname == "clean_sheet":
-            features[:, i] = _safe_col(timeseries, "clean_sheets")
-        elif fname == "saves_per90":
-            saves = _safe_col(timeseries, "saves")
-            # Normalize to per-90: saves / (minutes/90), avoid div-by-zero
-            features[:, i] = np.where(mins > 0, saves / np.maximum(mins / 90.0, 0.1), 0)
-        elif fname == "xGC_per90":
-            xgc = _safe_col(timeseries, "expected_goals_conceded")
-            if np.all(xgc == 0):
-                xgc = _safe_col(timeseries, "goals_conceded")
-            features[:, i] = np.where(mins > 0, xgc / np.maximum(mins / 90.0, 0.1), 0)
-        elif fname == "influence_norm":
-            features[:, i] = _safe_col(timeseries, "influence") / 100.0
-        elif fname == "creativity_norm":
-            features[:, i] = _safe_col(timeseries, "creativity") / 100.0
-        elif fname == "threat_norm":
-            features[:, i] = _safe_col(timeseries, "threat") / 100.0
-
+    # Domain-specific projection from rich event space to structural xPts.
+    features[:, 0] = compute_xpoints(timeseries, position)
     return features
 
 
@@ -186,7 +135,15 @@ class MultivariateHMM:
     ):
         self.position = position
         self.means, self.vars = _default_emissions(position)
-        self.A = transition_matrix.copy() if transition_matrix is not None else DEFAULT_TRANSITION.copy()
+
+        # Priors for MAP-style regularization in Baum-Welch.
+        self.prior_means = self.means.copy()
+        self.prior_vars = self.vars.copy()
+        self.prior_A = (
+            transition_matrix.copy() if transition_matrix is not None else DEFAULT_TRANSITION.copy()
+        )
+
+        self.A = self.prior_A.copy()
         self.pi = initial_dist.copy() if initial_dist is not None else DEFAULT_INITIAL.copy()
         self.n_states = N_STATES
         self.n_features = self.means.shape[1]
@@ -283,80 +240,84 @@ class MultivariateHMM:
         var = next_dist @ self.vars + next_dist @ (self.means**2) - mean**2
         return mean, np.maximum(var, 1e-8), next_dist
 
+    def _expected_points_from_state_dist(self, state_dist: np.ndarray) -> float:
+        """Map state distribution to expected points via projected xPts feature."""
+        xpts_idx = POSITION_FEATURES[self.position].index("xPts")
+        expected_points = float(state_dist @ self.means[:, xpts_idx])
+        return max(0.0, expected_points)
+
+    def one_step_point_predictions(self, observations: np.ndarray) -> np.ndarray:
+        """One-step-ahead point predictions for each historical timestep.
+
+        Returns array preds where preds[t] predicts points at timestep t,
+        using information up to t-1 (preds[0] is NaN).
+        """
+        T = len(observations)
+        preds = np.full(T, np.nan)
+        if T < 2:
+            return preds
+
+        alpha, _ = self.forward(observations)
+        for t in range(1, T):
+            pred_dist = alpha[t - 1] @ self._get_A(t)
+            preds[t] = self._expected_points_from_state_dist(pred_dist)
+        return preds
+
     def predict_next_points(self, observations: np.ndarray) -> tuple[float, float]:
         """
         Convert predicted features → expected FPL points.
 
         Uses FPL scoring rules applied to predicted feature rates.
         """
-        feat_mean, feat_var, state_dist = self.predict_next_features(observations)
+        feat_mean, feat_var, _ = self.predict_next_features(observations)
         feat_names = POSITION_FEATURES[self.position]
+        xpts_idx = feat_names.index("xPts")
 
-        # P(plays) from state distribution
-        p_plays = 1.0 - state_dist[0]
+        ep = max(0.0, float(feat_mean[xpts_idx]))
+        var_pts = float(max(feat_var[xpts_idx], 1e-6) + 1.0)  # residual floor
+        return ep, var_pts
 
-        # Map feature predictions to point components
-        def _get(name):
-            if name in feat_names:
-                return feat_mean[feat_names.index(name)]
-            return 0.0
+    def fit(
+        self,
+        observations: np.ndarray,
+        n_iter: int = 20,
+        tol: float = 1e-4,
+        prior_weight: float = 0.85,
+    ):
+        """Baum-Welch EM with MAP-style prior interpolation.
 
-        def _get_var(name):
-            if name in feat_names:
-                return feat_var[feat_names.index(name)]
-            return 0.0
-
-        # Appearance
-        appearance = 2.0 * p_plays
-
-        # Goals
-        xg = _get("xG")
-        goal_comp = xg * GOAL_PTS[self.position]
-
-        # Assists
-        xa = _get("xA")
-        assist_comp = xa * ASSIST_PTS
-
-        # Clean sheet
-        cs_rate = _get("clean_sheet")
-        cs_comp = cs_rate * CS_PTS[self.position]
-
-        # Goals conceded penalty
-        xgc = _get("xGC_per90")
-        gc_comp = (xgc / 2.0) * GC_PTS[self.position] * p_plays
-
-        # Bonus
-        bonus = _get("bonus")
-
-        # Saves (GK)
-        saves_comp = 0.0
-        if self.position == "GK":
-            saves_rate = _get("saves_per90")
-            saves_comp = saves_rate / 3.0 * p_plays
-
-        ep = appearance + goal_comp + assist_comp + cs_comp + gc_comp + bonus + saves_comp
-        ep = max(0.0, ep)
-
-        # Variance propagation through scoring rules
-        gp = GOAL_PTS[self.position]
-        var_pts = (
-            gp**2 * _get_var("xG")
-            + ASSIST_PTS**2 * _get_var("xA")
-            + CS_PTS[self.position] ** 2 * _get_var("clean_sheet")
-            + _get_var("bonus")
-            + 1.0
-        )  # residual floor
-
-        return ep, float(var_pts)
-
-    def fit(self, observations: np.ndarray, n_iter: int = 20, tol: float = 1e-4):
-        """Baum-Welch EM for multivariate diagonal Gaussian emissions."""
+        Parameters
+        ----------
+        observations : np.ndarray
+            Feature matrix with shape (T, D).
+        n_iter : int
+            Maximum EM iterations.
+        tol : float
+            Convergence tolerance on log-likelihood.
+        prior_weight : float
+            Weight on prior parameters in [0, 1]. Higher values increase
+            regularization toward position-level default emissions/transitions.
+        """
         T = observations.shape[0]
         prev_ll = -np.inf
+        prior_weight = float(np.clip(prior_weight, 0.0, 1.0))
 
-        for iteration in range(n_iter):
+        for _ in range(n_iter):
             alpha, scale = self.forward(observations)
-            gamma = self.forward_backward(observations)
+
+            # Backward pass with scaling aligned to forward()
+            beta = np.zeros((T, self.n_states))
+            beta[T - 1] = 1.0
+            for t in range(T - 2, -1, -1):
+                b_next = self._emission_prob_vector(observations[t + 1])
+                beta[t] = self._get_A(t + 1) @ (b_next * beta[t + 1])
+                if scale[t + 1] > 0:
+                    beta[t] /= scale[t + 1]
+
+            gamma = alpha * beta
+            rs = gamma.sum(axis=1, keepdims=True)
+            rs[rs == 0] = 1.0
+            gamma /= rs
 
             # M-step: initial
             self.pi = np.maximum(gamma[0], 1e-10)
@@ -368,15 +329,15 @@ class MultivariateHMM:
                 b_next = self._emission_prob_vector(observations[t + 1])
                 for i in range(self.n_states):
                     for j in range(self.n_states):
-                        xi[t, i, j] = alpha[t, i] * self._get_A(t + 1)[i, j] * b_next[j]
+                        xi[t, i, j] = alpha[t, i] * self._get_A(t + 1)[i, j] * b_next[j] * beta[t + 1, j]
                 xs = xi[t].sum()
                 if xs > 0:
                     xi[t] /= xs
             for i in range(self.n_states):
                 d = gamma[:-1, i].sum()
                 if d > 1e-10:
-                    for j in range(self.n_states):
-                        self.A[i, j] = xi[:, i, j].sum() / d
+                    mle_A = xi[:, i, :].sum(axis=0) / d
+                    self.A[i] = prior_weight * self.prior_A[i] + (1.0 - prior_weight) * mle_A
                 rs = self.A[i].sum()
                 if rs > 0:
                     self.A[i] /= rs
@@ -386,11 +347,14 @@ class MultivariateHMM:
                 w = gamma[:, s]
                 ws = w.sum()
                 if ws > 1e-10:
-                    mu = np.average(observations, axis=0, weights=w)
-                    diff = observations - mu
-                    var = np.average(diff**2, axis=0, weights=w)
-                    self.means[s] = mu
-                    self.vars[s] = np.maximum(var, 1e-4)
+                    mle_mu = np.average(observations, axis=0, weights=w)
+                    diff = observations - mle_mu
+                    mle_var = np.average(diff**2, axis=0, weights=w)
+                    self.means[s] = prior_weight * self.prior_means[s] + (1.0 - prior_weight) * mle_mu
+                    self.vars[s] = np.maximum(
+                        prior_weight * self.prior_vars[s] + (1.0 - prior_weight) * mle_var,
+                        1e-4,
+                    )
 
             ll = np.sum(np.log(scale + 1e-300))
             if abs(ll - prev_ll) < tol:

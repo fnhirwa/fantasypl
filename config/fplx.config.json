@@ -29,6 +29,12 @@
     },
     "hmm_params": {},
     "kf_params": {},
+    "mvhmm_params": {
+      "prior_weight": 0.85,
+      "n_iter": 15,
+      "lookback": 6,
+      "min_history": 3
+    },
     "news_params": {
       "classification_thresholds": {
         "unavailable_max_availability": 0.1,

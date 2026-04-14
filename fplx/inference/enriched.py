@@ -14,6 +14,10 @@ GOAL_PTS = {"GK": 6, "DEF": 6, "MID": 5, "FWD": 4}
 CS_PTS = {"GK": 4, "DEF": 4, "MID": 1, "FWD": 0}
 GC_PTS = {"GK": -1, "DEF": -1, "MID": 0, "FWD": 0}
 ASSIST_PTS = 3
+YELLOW_CARD_PTS = -1
+RED_CARD_PTS = -3
+PENALTY_MISS_PTS = -2
+OWN_GOAL_PTS = -2
 
 
 def _ewma(values: np.ndarray, alpha: float = 0.3) -> float:
@@ -59,11 +63,30 @@ def compute_xpoints(timeseries: pd.DataFrame, position: str) -> np.ndarray:
 
     bonus_comp = _safe_col(timeseries, "bonus")
 
+    # Negative event penalties (previously unmodeled noise)
+    yc_comp = _safe_col(timeseries, "yellow_cards") * YELLOW_CARD_PTS
+    rc_comp = _safe_col(timeseries, "red_cards") * RED_CARD_PTS
+    pm_comp = _safe_col(timeseries, "penalties_missed") * PENALTY_MISS_PTS
+    og_comp = _safe_col(timeseries, "own_goals") * OWN_GOAL_PTS
+
     saves_comp = np.zeros(n)
     if position == "GK":
         saves_comp = np.floor(_safe_col(timeseries, "saves") / 3.0)
 
-    return (appearance + goal_comp + assist_comp + cs_comp + gc_comp + bonus_comp + saves_comp) * played
+    total = (
+        appearance
+        + goal_comp
+        + assist_comp
+        + cs_comp
+        + gc_comp
+        + bonus_comp
+        + saves_comp
+        + yc_comp
+        + rc_comp
+        + pm_comp
+        + og_comp
+    )
+    return total * played
 
 
 def enriched_predict(

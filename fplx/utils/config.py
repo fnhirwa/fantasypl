@@ -42,6 +42,12 @@ class Config:
             "hmm_params": {},
             "kf_params": {},
             "news_params": {},
+            "mvhmm_params": {
+                "prior_weight": 0.85,
+                "n_iter": 15,
+                "lookback": 8,
+                "min_history": 3,
+            },
         },
     }
 

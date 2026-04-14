@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fplx.core.player import Player
 from fplx.data.vaastav_loader import VaastavLoader
 from fplx.evaluation.metrics import InferenceMetrics, OptimizationMetrics
-from fplx.inference.enriched import enriched_predict
+from fplx.inference.enriched import compute_xpoints, enriched_predict
 from fplx.inference.multivariate_hmm import MultivariateHMM, build_feature_matrix
 from fplx.inference.pipeline import PlayerInferencePipeline
 from fplx.selection.lagrangian import LagrangianOptimizer
@@ -45,6 +45,42 @@ from fplx.utils.config import Config
 logger = logging.getLogger(__name__)
 
 MIN_HISTORY = 5
+
+
+def calibrate_blend_weight(
+    points: np.ndarray,
+    enriched_hist: np.ndarray,
+    mvhmm_hist: np.ndarray,
+    min_history: int = 8,
+    grid_step: float = 0.05,
+) -> float:
+    """Calibrate blend weight for enriched vs MV-HMM via rolling one-step MSE.
+
+    Final blend is: w * enriched + (1-w) * mvhmm.
+    """
+    n = len(points)
+    if n <= min_history:
+        return 0.8
+
+    valid = np.isfinite(points) & np.isfinite(enriched_hist) & np.isfinite(mvhmm_hist)
+    if valid.sum() <= min_history:
+        return 0.8
+
+    y = points[valid]
+    e = enriched_hist[valid]
+    m = mvhmm_hist[valid]
+
+    alphas = np.arange(0.0, 1.0 + 1e-9, grid_step)
+    best_alpha = 0.8
+    best_mse = np.inf
+    for a in alphas:
+        pred = a * e + (1.0 - a) * m
+        mse = float(np.mean((pred - y) ** 2))
+        if mse < best_mse:
+            best_mse = mse
+            best_alpha = float(a)
+
+    return best_alpha
 
 
 def estimate_availability(timeseries, lookback: int = 3) -> float:
@@ -117,6 +153,10 @@ def run_backtest(
     fusion_mode: str = "calibrated_alpha",
     fusion_params: dict | None = None,
     hmm_variance_floor: float = 1.0,
+    mvhmm_prior_weight: float = 0.85,
+    mvhmm_n_iter: int = 15,
+    mvhmm_form_lookback: int = 8,
+    mvhmm_min_history: int = 3,
 ) -> dict:
     """
     Run the full-season backtest.
@@ -143,6 +183,14 @@ def run_backtest(
         Optional parameters for fusion mode (e.g., alpha grid settings).
     hmm_variance_floor : float
         Floor applied to HMM variance before fusion.
+    mvhmm_prior_weight : float
+        MAP prior interpolation weight for multivariate HMM fit.
+    mvhmm_n_iter : int
+        Number of EM iterations for multivariate HMM fit.
+    mvhmm_form_lookback : int
+        Number of most-recent gameweeks to use for MV-HMM form inference.
+    mvhmm_min_history : int
+        Minimum timesteps required to fit MV-HMM on the lookback window.
 
     Returns
     -------
@@ -191,6 +239,8 @@ def run_backtest(
         var_enriched = {}
         ep_mvhmm = {}  # multivariate HMM (position-specific features)
         var_mvhmm = {}
+        ep_blend = {}  # calibrated blend: enriched + MV-HMM
+        var_blend = {}
         ep_fused = {}  # scalar HMM+KF on filtered points
         var_fused = {}
         ep_rolling = {}
@@ -217,16 +267,68 @@ def run_backtest(
             # Multivariate HMM (position-specific features)
             mv_mu, mv_var = enr_mu, enr_var  # fallback
             try:
-                features = build_feature_matrix(p.timeseries, p.position)
-                if len(features) >= MIN_HISTORY:
+                recent_ts = p.timeseries.tail(mvhmm_form_lookback).copy()
+                features = build_feature_matrix(recent_ts, p.position)
+                if len(features) >= mvhmm_min_history:
                     mvhmm = MultivariateHMM(position=p.position)
-                    mvhmm.fit(features, n_iter=15)
+                    mvhmm.fit(
+                        features,
+                        n_iter=mvhmm_n_iter,
+                        prior_weight=mvhmm_prior_weight,
+                    )
                     mv_mu, mv_var = mvhmm.predict_next_points(features)
                     mv_mu = max(0.0, mv_mu)
             except Exception as e:
                 logger.debug("MV-HMM failed for %s: %s", p.name, e)
             ep_mvhmm[p.id] = mv_mu
             var_mvhmm[p.id] = mv_var
+
+            # Calibrated blend: keep enriched as anchor, let MV-HMM add signal.
+            blend_mu, blend_var = enr_mu, enr_var
+            try:
+                if "points" in p.timeseries.columns and len(p.timeseries) >= MIN_HISTORY + 3:
+                    blend_lookback = max(mvhmm_form_lookback, MIN_HISTORY + 3)
+                    ts = p.timeseries.tail(blend_lookback).reset_index(drop=True)
+                    y = ts["points"].astype(float).values
+                    mins_all = (
+                        ts["minutes"].astype(float).values
+                        if "minutes" in ts.columns
+                        else np.ones(len(ts)) * 90.0
+                    )
+                    played = mins_all > 0
+                    avail_roll = np.full(len(ts), np.nan)
+                    for t in range(1, len(ts)):
+                        lo = max(0, t - 3)
+                        avail_roll[t] = float(np.mean(played[lo:t]))
+
+                    xpts_hist = compute_xpoints(ts, p.position)
+                    e_hist = np.where(np.isfinite(avail_roll), avail_roll * xpts_hist, np.nan)
+
+                    feat_all = build_feature_matrix(ts, p.position)
+                    mvh_full = MultivariateHMM(position=p.position)
+                    if len(feat_all) >= mvhmm_min_history:
+                        mvh_full.fit(
+                            feat_all,
+                            n_iter=mvhmm_n_iter,
+                            prior_weight=mvhmm_prior_weight,
+                        )
+                    m_hist = mvh_full.one_step_point_predictions(feat_all)
+
+                    w = calibrate_blend_weight(
+                        points=y,
+                        enriched_hist=e_hist,
+                        mvhmm_hist=m_hist,
+                        min_history=max(3, mvhmm_min_history),
+                        grid_step=0.1,
+                    )
+
+                    blend_mu = w * enr_mu + (1.0 - w) * mv_mu
+                    blend_var = w**2 * enr_var + (1.0 - w) ** 2 * mv_var
+            except Exception as e:
+                logger.debug("Blend calibration failed for %s: %s", p.name, e)
+
+            ep_blend[p.id] = max(0.0, blend_mu)
+            var_blend[p.id] = max(1e-6, blend_var)
 
             # Scalar HMM+KF on filtered points (ablation)
             pts_played = filter_played(pts_raw, mins)
@@ -239,6 +341,8 @@ def run_backtest(
                         fusion_params=fusion_params if fusion_params else None,
                     )
                     pipe.ingest_observations(pts_played)
+                    if enable_hmm_learning and len(pts_played) >= 10:
+                        pipe.learn_parameters(n_iter=10)
                     result = pipe.run()
                     mu_r, var_r = pipe.predict_next()
                     ep_fused[p.id] = mu_r * avail
@@ -255,8 +359,8 @@ def run_backtest(
             # Record all ablation predictions
             actual = actual_points_gw.get(p.id, 0.0)
             inf_metrics.add(
-                predicted_mean=ep_enriched[p.id],
-                predicted_var=var_enriched[p.id],
+                predicted_mean=ep_blend[p.id],
+                predicted_var=var_blend[p.id],
                 actual=actual,
                 model_preds={
                     "rolling_avg": ep_rolling[p.id],
@@ -266,6 +370,7 @@ def run_backtest(
                     "fused_scalar": ep_fused[p.id],
                     "mv_hmm": ep_mvhmm[p.id],
                     "enriched": ep_enriched[p.id],
+                    "enriched_mvhmm_blend": ep_blend[p.id],
                 },
             )
 
@@ -301,6 +406,16 @@ def run_backtest(
                 strategy_actual_pts[f"ilp_mvhmm_{lam:.1f}"] = _score(sq)
             except Exception as e:
                 logger.warning("ILP mvhmm lam=%.1f: %s", lam, e)
+
+        # ILP + calibrated enriched/MV-HMM blend
+        for lam in risk_lambdas:
+            try:
+                sq = TwoLevelILPOptimizer(budget=100.0, risk_aversion=lam).optimize(
+                    valid_players, ep_blend, expected_variance=var_blend
+                )
+                strategy_actual_pts[f"ilp_blend_{lam:.1f}"] = _score(sq)
+            except Exception as e:
+                logger.warning("ILP blend lam=%.1f: %s", lam, e)
 
         # ILP + EWMA baseline
         try:
@@ -410,6 +525,30 @@ def main():
         default=None,
         help="Floor applied to HMM variance before fusion",
     )
+    parser.add_argument(
+        "--mvhmm-prior-weight",
+        type=float,
+        default=None,
+        help="MAP prior interpolation weight for MV-HMM (0-1)",
+    )
+    parser.add_argument(
+        "--mvhmm-n-iter",
+        type=int,
+        default=None,
+        help="EM iterations for MV-HMM",
+    )
+    parser.add_argument(
+        "--mvhmm-lookback",
+        type=int,
+        default=None,
+        help="Recent gameweeks window used by MV-HMM",
+    )
+    parser.add_argument(
+        "--mvhmm-min-history",
+        type=int,
+        default=None,
+        help="Minimum history required to fit MV-HMM",
+    )
     parser.add_argument("--verbose", action="store_true")
 
     args = parser.parse_args()
@@ -422,6 +561,7 @@ def main():
 
     inference_cfg = cfg_dict.get("inference", {})
     fusion_cfg = inference_cfg.get("fusion_params", {})
+    mvhmm_cfg = inference_cfg.get("mvhmm_params", {})
 
     season = resolve(args.season, cfg_dict.get("season"), "2023-24")
     data_dir = resolve(args.data_dir, cfg_dict.get("data_dir"), None)
@@ -433,6 +573,10 @@ def main():
     )
     fusion_mode = resolve(args.fusion_mode, inference_cfg.get("fusion_mode"), "calibrated_alpha")
     hmm_variance_floor = float(resolve(args.hmm_variance_floor, inference_cfg.get("hmm_variance_floor"), 1.0))
+    mvhmm_prior_weight = float(resolve(args.mvhmm_prior_weight, mvhmm_cfg.get("prior_weight"), 0.85))
+    mvhmm_n_iter = int(resolve(args.mvhmm_n_iter, mvhmm_cfg.get("n_iter"), 15))
+    mvhmm_form_lookback = int(resolve(args.mvhmm_lookback, mvhmm_cfg.get("lookback"), 8))
+    mvhmm_min_history = int(resolve(args.mvhmm_min_history, mvhmm_cfg.get("min_history"), 3))
     fusion_params = {
         "grid_step": float(resolve(args.fusion_alpha_grid_step, fusion_cfg.get("grid_step"), 0.05)),
         "default_alpha": float(resolve(args.fusion_alpha_default, fusion_cfg.get("default_alpha"), 0.7)),
@@ -451,6 +595,10 @@ def main():
         fusion_mode=fusion_mode,
         fusion_params=fusion_params,
         hmm_variance_floor=hmm_variance_floor,
+        mvhmm_prior_weight=mvhmm_prior_weight,
+        mvhmm_n_iter=mvhmm_n_iter,
+        mvhmm_form_lookback=mvhmm_form_lookback,
+        mvhmm_min_history=mvhmm_min_history,
     )
 
     # Save
