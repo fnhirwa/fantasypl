@@ -35,7 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fplx.core.player import Player
 from fplx.data.vaastav_loader import VaastavLoader
 from fplx.evaluation.metrics import InferenceMetrics, OptimizationMetrics
-from fplx.inference.enriched import compute_xpoints, enriched_predict
+from fplx.inference.enriched import enriched_predict
+from fplx.inference.multivariate_hmm import MultivariateHMM, build_feature_matrix
 from fplx.inference.pipeline import PlayerInferencePipeline
 from fplx.selection.lagrangian import LagrangianOptimizer
 from fplx.selection.optimizer import GreedyOptimizer, TwoLevelILPOptimizer
@@ -58,7 +59,7 @@ def estimate_availability(timeseries, lookback: int = 3) -> float:
 
 
 def filter_played(series: np.ndarray, minutes: np.ndarray) -> np.ndarray:
-    """Keep only values from GWs where player actually played."""
+    """Keep values from GWs where player got minutes."""
     mask = minutes > 0
     filtered = series[mask]
     return filtered if len(filtered) >= 2 else series
@@ -185,12 +186,12 @@ def run_backtest(
             logger.warning("Only %d valid players for GW%d, skipping.", len(valid_players), target_gw)
             continue
 
-        # Run inference for each player
-        ep_enriched = {}  # enriched (xG/xA/BPS decomposition)
+        # ===== Run inference for each player =====
+        ep_enriched = {}  # structural decomposition (xG/xA/BPS/CS)
         var_enriched = {}
-        ep_xfused = {}  # HMM+KF on xPoints (denoised signal)
-        var_xfused = {}
-        ep_fused = {}  # HMM+KF on raw points (baseline)
+        ep_mvhmm = {}  # multivariate HMM (position-specific features)
+        var_mvhmm = {}
+        ep_fused = {}  # scalar HMM+KF on filtered points
         var_fused = {}
         ep_rolling = {}
         ep_ewma = {}
@@ -208,67 +209,50 @@ def run_backtest(
             ep_rolling[p.id] = rolling_mean_predict(pts_raw) * avail
             ep_ewma[p.id] = ewma_predict(pts_raw) * avail
 
-            # Enriched prediction (structural decomposition)
+            # Enriched prediction
             enr_mu, enr_var = enriched_predict(p.timeseries, p.position)
             ep_enriched[p.id] = enr_mu
             var_enriched[p.id] = enr_var
 
-            # Compute xPoints: per-GW expected points from underlying rates
-            xpts_full = compute_xpoints(p.timeseries, p.position)
-            xpts_played = filter_played(xpts_full, mins)
-            pts_played = filter_played(pts_raw, mins)
-
-            # HMM+KF on xPoints (denoised signal)
-            hmm_xmu, kf_xmu = enr_mu, enr_mu  # fallbacks
+            # Multivariate HMM (position-specific features)
+            mv_mu, mv_var = enr_mu, enr_var  # fallback
             try:
-                if len(xpts_played) >= MIN_HISTORY:
-                    pipe_x = PlayerInferencePipeline(
-                        hmm_variance_floor=hmm_variance_floor,
-                        fusion_mode=fusion_mode,
-                        fusion_params=fusion_params if fusion_params else None,
-                    )
-                    pipe_x.ingest_observations(xpts_played)
-                    if enable_hmm_learning and len(xpts_played) >= 10:
-                        pipe_x.learn_parameters(n_iter=10)
-                    result_x = pipe_x.run()
-                    mu_x, var_x = pipe_x.predict_next()
-                    ep_xfused[p.id] = mu_x * avail
-                    var_xfused[p.id] = avail * var_x + avail * (1 - avail) * mu_x**2
-                    hmm_xmu = result_x.hmm_predicted_mean * avail
-                    kf_xmu = result_x.kf_predicted_mean * avail
-                else:
-                    ep_xfused[p.id] = enr_mu
-                    var_xfused[p.id] = enr_var
+                features = build_feature_matrix(p.timeseries, p.position)
+                if len(features) >= MIN_HISTORY:
+                    mvhmm = MultivariateHMM(position=p.position)
+                    mvhmm.fit(features, n_iter=15)
+                    mv_mu, mv_var = mvhmm.predict_next_points(features)
+                    mv_mu = max(0.0, mv_mu)
             except Exception as e:
-                logger.debug("xPoints inference failed for %s: %s", p.name, e)
-                ep_xfused[p.id] = enr_mu
-                var_xfused[p.id] = enr_var
+                logger.debug("MV-HMM failed for %s: %s", p.name, e)
+            ep_mvhmm[p.id] = mv_mu
+            var_mvhmm[p.id] = mv_var
 
-            # HMM+KF on raw points (for ablation comparison)
+            # Scalar HMM+KF on filtered points (ablation)
+            pts_played = filter_played(pts_raw, mins)
             hmm_mu, kf_mu = ep_rolling[p.id], ep_rolling[p.id]
             try:
                 if len(pts_played) >= MIN_HISTORY:
-                    pipe_raw = PlayerInferencePipeline(
+                    pipe = PlayerInferencePipeline(
                         hmm_variance_floor=hmm_variance_floor,
                         fusion_mode=fusion_mode,
                         fusion_params=fusion_params if fusion_params else None,
                     )
-                    pipe_raw.ingest_observations(pts_played)
-                    result_raw = pipe_raw.run()
-                    mu_raw, var_raw = pipe_raw.predict_next()
-                    ep_fused[p.id] = mu_raw * avail
-                    var_fused[p.id] = avail * var_raw + avail * (1 - avail) * mu_raw**2
-                    hmm_mu = result_raw.hmm_predicted_mean * avail
-                    kf_mu = result_raw.kf_predicted_mean * avail
+                    pipe.ingest_observations(pts_played)
+                    result = pipe.run()
+                    mu_r, var_r = pipe.predict_next()
+                    ep_fused[p.id] = mu_r * avail
+                    var_fused[p.id] = avail * var_r + avail * (1 - avail) * mu_r**2
+                    hmm_mu = result.hmm_predicted_mean * avail
+                    kf_mu = result.kf_predicted_mean * avail
                 else:
                     ep_fused[p.id] = ep_rolling[p.id]
                     var_fused[p.id] = 4.0
-            except Exception as e:
-                logger.debug("Raw inference failed for %s: %s", p.name, e)
+            except Exception:
                 ep_fused[p.id] = ep_rolling[p.id]
                 var_fused[p.id] = 4.0
 
-            # Metrics: track enriched as primary (best predictor)
+            # Record all ablation predictions
             actual = actual_points_gw.get(p.id, 0.0)
             inf_metrics.add(
                 predicted_mean=ep_enriched[p.id],
@@ -277,69 +261,72 @@ def run_backtest(
                 model_preds={
                     "rolling_avg": ep_rolling[p.id],
                     "ewma": ep_ewma[p.id],
-                    "hmm_raw": hmm_mu,
-                    "kf_raw": kf_mu,
-                    "fused_raw": ep_fused[p.id],
-                    "hmm_xpts": hmm_xmu,
-                    "kf_xpts": kf_xmu,
-                    "fused_xpts": ep_xfused[p.id],
+                    "hmm_scalar": hmm_mu,
+                    "kf_scalar": kf_mu,
+                    "fused_scalar": ep_fused[p.id],
+                    "mv_hmm": ep_mvhmm[p.id],
                     "enriched": ep_enriched[p.id],
                 },
             )
 
-        # ========== Optimization strategies ==========
+        # ===== Optimization strategies =====
         strategy_actual_pts = {}
+
+        def _score(sq):
+            return sum(actual_points_gw.get(p.id, 0.0) for p in sq.lineup.players)
 
         # Greedy baseline
         try:
-            greedy = GreedyOptimizer(budget=100.0)
-            sq = greedy.optimize(valid_players, ep_rolling)
-            strategy_actual_pts["greedy_rolling"] = sum(
-                actual_points_gw.get(p.id, 0.0) for p in sq.lineup.players
-            )
+            sq = GreedyOptimizer(budget=100.0).optimize(valid_players, ep_rolling)
+            strategy_actual_pts["greedy_rolling"] = _score(sq)
         except Exception as e:
-            logger.warning("Greedy failed: %s", e)
+            logger.warning("Greedy: %s", e)
 
-        # ILP + enriched (best predictor) at different lambdas
+        # ILP + enriched (structural decomposition)
         for lam in risk_lambdas:
             try:
-                opt = TwoLevelILPOptimizer(budget=100.0, risk_aversion=lam)
-                sq = opt.optimize(valid_players, ep_enriched, expected_variance=var_enriched)
-                strategy_actual_pts[f"ilp_enriched_{lam:.1f}"] = sum(
-                    actual_points_gw.get(p.id, 0.0) for p in sq.lineup.players
+                sq = TwoLevelILPOptimizer(budget=100.0, risk_aversion=lam).optimize(
+                    valid_players, ep_enriched, expected_variance=var_enriched
                 )
+                strategy_actual_pts[f"ilp_enriched_{lam:.1f}"] = _score(sq)
             except Exception as e:
-                logger.warning("ILP enriched (lam=%.1f) failed: %s", lam, e)
+                logger.warning("ILP enriched lam=%.1f: %s", lam, e)
 
-        # ILP + xPoints-fused (HMM+KF on denoised signal)
+        # ILP + multivariate HMM
         for lam in risk_lambdas:
             try:
-                opt = TwoLevelILPOptimizer(budget=100.0, risk_aversion=lam)
-                sq = opt.optimize(valid_players, ep_xfused, expected_variance=var_xfused)
-                strategy_actual_pts[f"ilp_xfused_{lam:.1f}"] = sum(
-                    actual_points_gw.get(p.id, 0.0) for p in sq.lineup.players
+                sq = TwoLevelILPOptimizer(budget=100.0, risk_aversion=lam).optimize(
+                    valid_players, ep_mvhmm, expected_variance=var_mvhmm
                 )
+                strategy_actual_pts[f"ilp_mvhmm_{lam:.1f}"] = _score(sq)
             except Exception as e:
-                logger.warning("ILP xfused (lam=%.1f) failed: %s", lam, e)
+                logger.warning("ILP mvhmm lam=%.1f: %s", lam, e)
 
         # ILP + EWMA baseline
         try:
-            opt = TwoLevelILPOptimizer(budget=100.0, risk_aversion=0.0)
-            sq = opt.optimize(valid_players, ep_ewma)
-            strategy_actual_pts["ilp_ewma"] = sum(actual_points_gw.get(p.id, 0.0) for p in sq.lineup.players)
+            sq = TwoLevelILPOptimizer(budget=100.0).optimize(valid_players, ep_ewma)
+            strategy_actual_pts["ilp_ewma"] = _score(sq)
         except Exception as e:
-            logger.warning("ILP+EWMA failed: %s", e)
+            logger.warning("ILP ewma: %s", e)
+
+        # ILP + scalar fused (ablation)
+        try:
+            sq = TwoLevelILPOptimizer(budget=100.0).optimize(
+                valid_players, ep_fused, expected_variance=var_fused
+            )
+            strategy_actual_pts["ilp_fused_scalar"] = _score(sq)
+        except Exception as e:
+            logger.warning("ILP fused scalar: %s", e)
 
         # Lagrangian + enriched
         try:
-            lagr = LagrangianOptimizer(budget=100.0, max_iter=100)
-            lr = lagr.solve(valid_players, ep_enriched, expected_variance=var_enriched)
+            lr = LagrangianOptimizer(budget=100.0, max_iter=100).solve(
+                valid_players, ep_enriched, expected_variance=var_enriched
+            )
             if lr.full_squad:
-                strategy_actual_pts["lagr_enriched"] = sum(
-                    actual_points_gw.get(p.id, 0.0) for p in lr.full_squad.lineup.players
-                )
+                strategy_actual_pts["lagr_enriched"] = _score(lr.full_squad)
         except Exception as e:
-            logger.warning("Lagrangian failed: %s", e)
+            logger.warning("Lagrangian: %s", e)
 
         # Oracle
         oracle_pts = compute_oracle_squad(valid_players, actual_points_gw)
