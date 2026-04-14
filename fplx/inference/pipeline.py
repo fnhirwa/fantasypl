@@ -91,7 +91,8 @@ DEFAULT_NEWS_PARAMS = {
 }
 
 DEFAULT_FUSION_PARAMS = {
-    "default_alpha": 0.7,
+    "default_alpha": 0.8,
+    "alpha_floor": 0.5,
     "grid_step": 0.05,
     "min_history": 8,
 }
@@ -347,8 +348,13 @@ class PlayerInferencePipeline:
 
     def _estimate_fusion_alpha(self, observations: np.ndarray) -> float:
         """Estimate alpha in y = alpha*KF + (1-alpha)*HMM via rolling validation."""
-        default_alpha = float(self.fusion_params.get("default_alpha", 0.7))
+        default_alpha = float(self.fusion_params.get("default_alpha", 0.8))
         default_alpha = float(np.clip(default_alpha, 0.0, 1.0))
+
+        # Floor: KF always gets at least this weight. The HMM's 5-state
+        # discretization loses information relative to the KF's continuous
+        # tracking, so we never let HMM dominate the fusion.
+        alpha_floor = float(self.fusion_params.get("alpha_floor", 0.5))
 
         min_history = int(self.fusion_params.get("min_history", 8))
         min_history = max(3, min_history)
@@ -386,7 +392,7 @@ class PlayerInferencePipeline:
         kf_preds = np.asarray(kf_preds)
         actuals = np.asarray(actuals)
 
-        alphas = np.arange(0.0, 1.0 + 1e-9, grid_step)
+        alphas = np.arange(alpha_floor, 1.0 + 1e-9, grid_step)
         mses = []
         for alpha in alphas:
             pred = alpha * kf_preds + (1.0 - alpha) * hmm_preds

@@ -6,6 +6,7 @@ from fplx.selection.constraints import (
     SquadQuotas,
     TeamDiversityConstraint,
 )
+from fplx.selection.lagrangian import LagrangianOptimizer, LagrangianResult
 from fplx.selection.optimizer import (
     GreedyOptimizer,
     ILPOptimizer,
@@ -22,4 +23,6 @@ __all__ = [
     "ILPOptimizer",
     "GreedyOptimizer",
     "OptimizationResult",
+    "LagrangianOptimizer",
+    "LagrangianResult",
 ]
