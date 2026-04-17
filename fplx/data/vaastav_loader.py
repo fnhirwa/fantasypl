@@ -254,19 +254,29 @@ class VaastavLoader:
                     "gameweek",
                     "points",
                     "minutes",
+                    "starts",
                     "goals",
                     "assists",
                     "xG",
                     "xA",
                     "bonus",
+                    "bps",
                     "clean_sheets",
                     "goals_conceded",
                     "saves",
-                    "bps",
+                    "yellow_cards",
+                    "red_cards",
+                    "own_goals",
+                    "penalties_missed",
+                    "penalties_saved",
                     "influence",
                     "creativity",
                     "threat",
                     "ict_index",
+                    "was_home",
+                    "opponent_team",
+                    "expected_goals_conceded",
+                    "xP",
                     "value",
                     "selected",
                     "transfers_in",
@@ -303,6 +313,19 @@ class VaastavLoader:
         df = self.load_gameweek(gw)
         pts_col = "points" if "points" in df.columns else "total_points"
         return dict(zip(df["element"].astype(int), df[pts_col].astype(float)))
+
+    def get_fixture_info(self, gw: int) -> dict[int, dict]:
+        """Get fixture context (opponent, home/away, xP) per player for a GW."""
+        df = self.load_gameweek(gw)
+        info = {}
+        for _, row in df.iterrows():
+            pid = int(row.get("element", 0))
+            info[pid] = {
+                "was_home": bool(row.get("was_home", False)),
+                "opponent_team": int(row.get("opponent_team", 0)) if "opponent_team" in df.columns else 0,
+                "xP": float(row.get("xP", 0.0)) if "xP" in df.columns else 0.0,
+            }
+        return info
 
 
 __all__ = ["VaastavLoader"]

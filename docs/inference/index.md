@@ -1,9 +1,9 @@
 # Part I — Probabilistic Inference
 
-!!! abstract "Course Context"
+!!! abstract
     This component implements the inference pipeline.
     It demonstrates **Perceiving** (NLP signal processing), **Belief updating** (HMM/Kalman filtering),
-    and feeds into the **Acting** stage (Part II).
+    and feeds into the **Acting** stage (Optimization).
 
 ## Motivation
 

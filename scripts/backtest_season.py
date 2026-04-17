@@ -244,6 +244,12 @@ def run_backtest(
             logger.warning("GW%d data not found, skipping.", target_gw)
             continue
 
+        # Get fixture context for predictions (available before deadline)
+        try:
+            fixture_info = loader.get_fixture_info(target_gw)
+        except Exception:
+            fixture_info = {}
+
         # Filter to players who have enough history and appear in target GW
         valid_players = [
             p
@@ -260,6 +266,7 @@ def run_backtest(
         # ===== Run inference for each player =====
         ep_enriched = {}  # structural decomposition (xG/xA/BPS/CS)
         var_enriched = {}
+        dr_enriched = {}  # semi-variance (downside risk)
         ep_mvhmm = {}  # multivariate HMM (position-specific features)
         var_mvhmm = {}
         ep_blend = {}  # calibrated blend: enriched + MV-HMM
@@ -295,10 +302,12 @@ def run_backtest(
             ep_rolling[p.id] = rolling_mean_predict(pts_raw) * avail
             ep_ewma[p.id] = ewma_predict(pts_raw) * avail
 
-            # Enriched prediction
-            enr_mu, enr_var = enriched_predict(p.timeseries, p.position)
+            # Enriched prediction (fixture-aware, with semi-variance)
+            fix = fixture_info.get(p.id)
+            enr_mu, enr_var, enr_dr = enriched_predict(p.timeseries, p.position, upcoming_fixture=fix)
             ep_enriched[p.id] = enr_mu
             var_enriched[p.id] = enr_var
+            dr_enriched[p.id] = enr_dr
 
             # Multivariate HMM (position-specific features)
             mv_mu, mv_var = enr_mu, enr_var  # fallback
@@ -426,7 +435,7 @@ def run_backtest(
         except Exception as e:
             logger.warning("Greedy: %s", e)
 
-        # ILP + enriched (structural decomposition)
+        # ILP + enriched (structural decomposition, symmetric variance penalty)
         for lam in risk_lambdas:
             try:
                 sq = TwoLevelILPOptimizer(budget=100.0, risk_aversion=lam).optimize(
@@ -435,6 +444,18 @@ def run_backtest(
                 strategy_actual_pts[f"ilp_enriched_{lam:.1f}"] = _score(sq)
             except Exception as e:
                 logger.warning("ILP enriched lam=%.1f: %s", lam, e)
+
+        # ILP + enriched with SEMI-VARIANCE (downside-only risk penalty)
+        # Penalizes only deviations BELOW predicted value, preserving
+        # high-ceiling players that symmetric variance kills.
+        for lam in [0.5, 1.0, 1.5]:
+            try:
+                sq = TwoLevelILPOptimizer(budget=100.0, risk_aversion=lam).optimize(
+                    valid_players, ep_enriched, downside_risk=dr_enriched
+                )
+                strategy_actual_pts[f"ilp_semivar_{lam:.1f}"] = _score(sq)
+            except Exception as e:
+                logger.warning("ILP semivar lam=%.1f: %s", lam, e)
 
         # ILP + multivariate HMM
         for lam in risk_lambdas:

@@ -8,8 +8,8 @@ This project spans two components:
 
 | | Component | Focus |
 |---|-----------|-------|
-| :material-brain: | [**Part I — Inference**](inference/index.md) | HMM + Kalman Filter for probabilistic point forecasting with news signal injection |
-| :material-chart-box: | [**Part II — Optimization**](optimization/index.md) | ILP formulation, duality analysis, and robust squad selection under uncertainty |
+| :material-brain: | [**Inference**](inference/index.md) | HMM + Kalman Filter for probabilistic point forecasting with news signal injection |
+| :material-chart-box: | [**Optimization**](optimization/index.md) | ILP formulation, duality analysis, and robust squad selection under uncertainty |
 
 ---
 

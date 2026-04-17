@@ -1,8 +1,8 @@
-# Part II — Constrained Optimization
+# Constrained Optimization
 
-!!! abstract "Course Context"
+!!! abstract
     This component implements the squad-selection optimization.
-    It takes the inference outputs from Part I (predicted points with uncertainty) and solves a constrained
+    It takes the inference outputs from Inference (predicted points with uncertainty) and solves a constrained
     integer program to select the optimal 11-player squad.
 
 ## Problem Statement
@@ -11,15 +11,15 @@ Given $n$ players with predicted expected points $E[P_i]$ and prediction varianc
 
 This is a **multi-dimensional knapsack problem** — NP-hard in general, but tractable for FPL-sized instances via ILP solvers.
 
-## Connection to Part I
+## Connection to Inference
 
 The inference pipeline produces two quantities per player:
 
 ``` mermaid
 graph LR
-    INF["Part I: Inference"] -->|"E[P_i]"| OBJ["Objective coefficients"]
+    INF["Inference"] -->|"E[P_i]"| OBJ["Objective coefficients"]
     INF -->|"Var[P_i]"| ROB["Robust penalty term"]
-    OBJ --> ILP["Part II: ILP Solver"]
+    OBJ --> ILP["ILP Solver"]
     ROB --> ILP
     ILP --> SQUAD["Optimal Squad"]
 ```
@@ -27,7 +27,7 @@ graph LR
 - **Point forecast** $E[P_i]$ → objective coefficient in the ILP
 - **Uncertainty** $\text{Var}[P_i]$ → risk penalty in the robust variant
 
-Without Part I, the optimizer receives flat point estimates with no uncertainty information. With Part I, the optimizer can hedge against unreliable forecasts.
+Without Inference, the optimizer receives flat point estimates with no uncertainty information. With Inference, the optimizer can hedge against unreliable forecasts.
 
 ## Sections
 
