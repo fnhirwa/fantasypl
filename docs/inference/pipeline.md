@@ -1,107 +1,129 @@
 # Inference Pipeline
 
-The core contribution of FPLX. Each player is modeled independently through a dual-filter system that tracks both discrete form states and continuous point potential.
+The core contribution of FPLX. Each player is modeled independently through a
+multi-component system that tracks discrete form states (MV-HMM), continuous
+point potential (Kalman Filter), and structural statistical patterns (Enriched
+predictor). Their outputs are blended via calibrated inverse-variance weighting.
 
 ## Overview
 
 ```mermaid
 graph TD
-    O[Points History] --> HMM
-    O --> KF[Kalman Filter]
+    RAW[Raw per-fixture data] --> AGG[aggregate_dgw_timeseries\none row / GW, points_norm]
+    AGG --> E[Enriched Predictor]
+    AGG --> HMM[MV-HMM]
+    AGG --> KF[Kalman Filter]
     N[NewsSignal] -->|Transition perturbation| HMM
     N -->|Process noise shock| KF
-    F[FixtureSignal] -->|Observation noise| KF
-    HMM -->|"P(State), E[Y], Var[Y]"| FU[Fusion]
-    KF -->|"x̂, P"| FU
-    FU -->|"E[P], Var[P]"| OPT[Optimizer]
+    HMM -->|E[Y], Var[Y]| BL[Calibrated Blend]
+    E -->|mu_e, var_e, DR| BL
+    KF -->|x̂, P| BL
+    BL -->|per-fixture E[P], Var[P], DR| SC[scale_predictions_for_dgw\n× n_fixtures]
+    SC -->|full-GW E[P], Var[P]| OPT[Two-Level ILP]
 ```
 
-## Hidden Markov Model
+## Components
 
-The HMM tracks 5 discrete form states. Each state has a Gaussian emission model defining the expected points distribution.
+### Enriched Predictor
 
-| State | Mean | Std | Interpretation |
-|-------|------|-----|----------------|
-| Injured | 0.5 | 0.5 | Out or minimal cameo |
-| Slump | 2.0 | 1.0 | Playing but underperforming |
-| Average | 4.0 | 1.5 | Typical output |
-| Good | 6.0 | 1.5 | Above-average returns |
-| Star | 8.5 | 2.0 | Exceptional gameweek |
+The single strongest individual model. Constructs a per-player feature vector
+including: EWMA of xG, xA, BPS, clean sheets, cards, own goals, penalties;
+fixture difficulty (home/away factor, opponent strength); and rolling statistics
+at windows [3, 5, 10]. A Ridge regression maps these features to expected points.
 
-States are "sticky", the default transition matrix has high self-transition probabilities (0.50–0.60) with gradual drift between adjacent states.
+The enriched predictor also computes a **semi-variance** (downside risk below
+E[P]) used directly by the risk-averse ILP objective.
 
-### Algorithms
+Key principle: **availability prediction is separated from form prediction.**
+The enriched predictor is fitted only on played gameweeks (minutes > 0), then
+availability (from recent minutes history) is applied as a multiplicative factor.
+This prevents the "Injured" state from absorbing variance that belongs to the
+form distribution.
 
-| Algorithm | What it computes | Use case |
-|-----------|-----------------|----------|
-| Forward | $P(S_t \mid y_{1:t})$ | Online filtering |
-| Forward-Backward | $P(S_t \mid y_{1:T})$ | Smoothed posteriors, fusion input |
-| Viterbi | Most likely state sequence | Visualization, diagnostics |
-| Baum-Welch | Learns $A$, $\mu$, $\sigma$ from data | Parameter training |
+### Multivariate HMM
 
-### News Perturbation
+Each player is represented by a discrete hidden state
+$S_t \in \{	ext{Injured}, 	ext{Slump}, 	ext{Average}, 	ext{Good}, 	ext{Star}\}$.
 
-When news is injected at timestep $t$, the transition matrix for that timestep is modified:
+The MV-HMM uses position-specific feature vectors (not raw points scalars):
 
-$$A_t[i, j] = A[i, j] \times \big(1 + c \cdot (b_j - 1)\big)$$
+| Feature | GK | DEF | MID | FWD |
+|---------|:--:|:---:|:---:|:---:|
+| xPts (composite) | ✓ | ✓ | ✓ | ✓ |
+| Minutes fraction | ✓ | ✓ | ✓ | ✓ |
 
-where $b_j$ is the boost factor for target state $j$ and $c$ is the news confidence. The row is then renormalized. This means even from the Star state, an "unavailable" signal makes transitioning to Injured 10× more likely, but the observation evidence still has a say.
+Emission distributions are diagonal Gaussians per state. Parameters are learned
+via Baum-Welch EM with MAP regularization toward position-level priors
+(weight `prior_weight=0.85`), preventing overfitting on short histories.
 
-## Kalman Filter
+!!! warning "Scalar HMM / KF alone are worse than rolling average"
+    In both backtested seasons, the scalar HMM and KF individually *increase*
+    MSE above the rolling average baseline. Probabilistic machinery only delivers
+    gains when paired with structural observations (xG, xA, BPS, fixture context).
+    The MV-HMM with position features is the correct architecture.
 
-Tracks a continuous latent variable $x_t$ representing the player's true point potential via a random-walk model:
+### Kalman Filter
+
+Tracks a continuous latent variable $x_t$ via a random-walk model:
 
 $$x_{t+1} = x_t + w_t, \quad w_t \sim \mathcal{N}(0, Q_t)$$
 $$y_t = x_t + v_t, \quad v_t \sim \mathcal{N}(0, R_t)$$
 
-The filter produces minimum-MSE estimates $\hat{x}_t$ and posterior variance $P_t$ at each timestep.
+The filter yields minimum-MSE estimate $\hat{x}_t$ and posterior variance $P_t$.
 
-### Adaptive Noise
+### News Signal Injection
 
-Both $Q_t$ and $R_t$ can be overridden per-timestep by external signals:
+News is injected **inside** the inference process, not as a post-hoc multiplier.
+When news indicates an injury:
 
-| Signal | Parameter | Effect |
-|--------|-----------|--------|
-| Injury news | $Q_t = Q \times 5.0$ | Form may have jumped; widen state uncertainty |
-| Doubtful news | $Q_t = Q \times 2.0$ | Moderate form uncertainty |
-| Easy fixture | $R_t = R \times 0.8$ | Points more predictable, trust observation more |
-| Hard fixture | $R_t = R \times 1.5$ | Points less predictable, trust prior more |
+| Category | HMM boost | KF $Q_t$ multiplier |
+|----------|-----------|:-------------------:|
+| Unavailable | Injured ×10 | 5.0× |
+| Doubtful | Injured ×3, Slump ×2 | 2.0× |
+| Rotation | Slump ×2 | 1.5× |
+| Positive | Good ×2 | 1.0× |
 
-!!! info "Kalman Gain Interpretation"
-    When $Q_t$ is large, the Kalman gain $K$ increases, the filter trusts the next observation more (prior is wide). When $R_t$ is large, $K$ decreases, the filter trusts the prior more (observation is noisy).
+**Anticipatory advantage:** when news arrives before the gameweek (e.g.
+"doubtful for Saturday"), the pipeline adjusts predictions before observing 0
+points. Observation-only methods must wait one gameweek.
 
-## Fusion
+### Calibrated Blend
 
-The HMM and Kalman Filter outputs are combined via inverse-variance weighting:
+The Enriched predictor and MV-HMM are blended per player:
 
-$$\mu_{\text{fused}} = \frac{\sigma^2_{KF} \cdot \mu_{HMM} + \sigma^2_{HMM} \cdot \mu_{KF}}{\sigma^2_{HMM} + \sigma^2_{KF}}$$
+$$\hat\mu = lpha \hat\mu_	ext{enr} + (1-lpha) \hat\mu_	ext{mv}$$
+$$\hat\sigma^2 = lpha^2 \hat\sigma^2_	ext{enr} + (1-lpha)^2 \hat\sigma^2_	ext{mv}$$
 
-$$\sigma^2_{\text{fused}} = \frac{1}{1/\sigma^2_{HMM} + 1/\sigma^2_{KF}}$$
+$lpha$ is calibrated per player via a rolling one-step MSE grid search over
+the player's historical data. Default $lpha = 0.8$ (enriched-dominant) when
+fewer than 8 gameweeks of history are available.
 
-The fused variance is always $\leq \min(\sigma^2_{HMM}, \sigma^2_{KF})$: combining two estimates always reduces uncertainty.
+The KF output is fused with the blend via inverse-variance weighting (the
+guarantee that $\hat\sigma^2_	ext{fused} \leq \min(\hat\sigma^2)$ holds).
 
-!!! warning "Independence Assumption"
-    This assumes the HMM and KF estimates are independent. They share the same observation sequence, so this is approximate. The approximation is acceptable because the HMM captures discrete regime structure while the KF captures continuous trends, they extract different information from the same data.
+## Ablation Results
 
-## Usage
+| Model | MSE 2023–24 | MSE 2024–25 |
+|-------|:-----------:|:-----------:|
+| Rolling average (baseline) | 4.269 | 4.727 |
+| EWMA | 4.172 | 4.599 |
+| HMM scalar | 4.574 | 5.045 |
+| KF scalar | 4.291 | 4.715 |
+| Fused scalar | 4.295 | 4.726 |
+| MV-HMM | 4.509 | 4.875 |
+| Enriched | 3.643 | 4.197 |
+| **Enriched + MV-HMM blend** | **3.656** | **4.145** |
+| TFT q50 | 4.197 | 4.573 |
 
-```python
-from fplx.inference.pipeline import PlayerInferencePipeline
-from fplx.signals.news import NewsSignal
+95% calibration coverage: 91.3% (2023–24) and 90.1% (2024–25).
 
-pipeline = PlayerInferencePipeline(
-    kf_params={"Q": 1.0, "R": 4.0, "x0": 4.0, "P0": 2.0}
-)
+## Double Gameweeks
 
-pipeline.ingest_observations(points_array)
-pipeline.inject_news(
-    NewsSignal().generate_signal("Ruled out for 3 weeks"),
-    timestep=20
-)
-pipeline.inject_fixture_difficulty(difficulty=4.5, timestep=21)
+DGW handling is fully integrated into the data layer.
+`aggregate_dgw_timeseries` is called automatically inside
+`VaastavLoader.build_player_objects` (historical) and `build_timeseries`
+(live API), so the inference pipeline always receives one row per GW with
+`points_norm` (per-fixture normalised) as the training target.
+`scale_predictions_for_dgw` is the only DGW-aware step after inference.
 
-result = pipeline.run()
-ep_mean, ep_var = pipeline.predict_next()
-```
-
-The `InferenceResult` object contains all intermediate outputs: filtered beliefs, smoothed posteriors, Viterbi path, Kalman estimates, and fused sequences.
+See [Double Gameweeks](double-gameweek.md) for full details.

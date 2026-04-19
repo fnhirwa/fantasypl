@@ -1,4 +1,4 @@
-# Part I — Probabilistic Inference
+# Probabilistic Inference
 
 !!! abstract
     This component implements the inference pipeline.

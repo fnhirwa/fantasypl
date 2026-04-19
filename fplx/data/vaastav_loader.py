@@ -13,6 +13,24 @@ Usage (local):
     players = loader.build_player_objects(up_to_gw=20)
 
 Dataset: https://github.com/vaastav/Fantasy-Premier-League
+
+Double Gameweek handling
+------------------------
+``build_player_objects`` automatically calls
+``aggregate_dgw_timeseries`` on every player's raw timeseries before
+constructing the ``Player`` object.  This means all downstream consumers
+(inference pipeline, MV-HMM, enriched predictor, Kalman Filter) always
+receive exactly **one row per FPL decision period**.
+
+For DGW gameweeks, the resulting row contains:
+  ``points``      – raw total (both fixtures summed, used for scoring / oracle)
+  ``points_norm`` – per-fixture average (used by inference components)
+  ``n_fixtures``  – number of fixtures played (1 for SGW, 2 for DGW)
+
+The inference pipeline uses ``points_norm`` so that HMM emission distributions
+remain calibrated on single-game-equivalent observations.  The ILP objective
+then scales back via ``scale_predictions_for_dgw`` to reflect the full DGW
+opportunity.
 """
 
 import logging
@@ -24,6 +42,7 @@ from urllib.error import HTTPError
 import pandas as pd
 
 from fplx.core.player import Player
+from fplx.data.double_gameweek import aggregate_dgw_timeseries
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +307,13 @@ class VaastavLoader:
             for col in timeseries.columns:
                 timeseries[col] = pd.to_numeric(timeseries[col], errors="coerce")
 
+            # ── DGW aggregation ───────────────────────────────────────────
+            # Always collapse to one row per GW decision period.
+            # DGW gameweeks receive per-fixture normalised scores so that the
+            # inference pipeline (HMM, enriched, KF) operates on single-game-
+            # equivalent observations. See double_gameweek.py for details.
+            timeseries = aggregate_dgw_timeseries(timeseries)
+
             player = Player(
                 id=pid,
                 name=name,
@@ -305,14 +331,22 @@ class VaastavLoader:
         """
         Get actual points scored by each player in a specific gameweek.
 
+        For Double Gameweek players (two fixtures in the same round) the
+        points from both fixtures are **summed**, which is the correct FPL
+        score for that gameweek. The previous implementation used ``dict(zip(…))``
+        which silently discarded the first fixture row when a player appeared
+        twice, underreporting DGW scores.
+
         Returns
         -------
         dict[int, float]
-            {player_id: actual_points}
+            {player_id: actual_points}  (summed across fixtures for DGW players)
         """
         df = self.load_gameweek(gw)
         pts_col = "points" if "points" in df.columns else "total_points"
-        return dict(zip(df["element"].astype(int), df[pts_col].astype(float)))
+        # groupby + sum handles both SGW (one row) and DGW (two rows) correctly
+        summed = df.groupby("element")[pts_col].sum().reset_index()
+        return dict(zip(summed["element"].astype(int), summed[pts_col].astype(float)))
 
     def get_fixture_info(self, gw: int) -> dict[int, dict]:
         """Get fixture context (opponent, home/away, xP) per player for a GW."""

@@ -4,99 +4,115 @@
 
 ```
 fplx/
-├── api/              High-level orchestrator
-│   └── interface.py      FPLModel: load_data → fit → select_best_11
+├── api/
+│   └── interface.py          FPLModel orchestrator
 │
-├── core/             Domain objects
-│   ├── player.py         Player dataclass (id, name, team, position, price, timeseries)
-│   ├── squad.py          Squad dataclass with formation validation
-│   └── matchweek.py      Gameweek context
+├── core/
+│   ├── player.py             Player dataclass
+│   ├── squad.py              Squad + FullSquad dataclasses
+│   └── matchweek.py          Gameweek context
 │
-├── data/             Data layer
-│   ├── loaders.py        FPL API client, CSV loader, player enrichment
-│   ├── news_collector.py Per-gameweek news snapshot persistence
-│   └── schemas.py        Pydantic validation schemas
+├── data/
+│   ├── loaders.py            FPL API client + caching
+│   ├── vaastav_loader.py     Historical dataset loader (vaastav/Fantasy-Premier-League)
+│   ├── double_gameweek.py    DGW detection, timeseries aggregation, prediction scaling
+│   ├── tft_dataset.py        Panel dataset builder for TFT
+│   ├── news_collector.py     Per-gameweek news snapshot persistence
+│   └── schemas.py            Pydantic validation schemas
 │
-├── inference/        Probabilistic inference (core contribution)
-│   ├── hmm.py            HMM: Forward, Forward-Backward, Viterbi, Baum-Welch
-│   ├── kalman.py         1D Kalman Filter with adaptive noise + RTS smoother
-│   ├── fusion.py         Inverse-variance weighting
-│   └── pipeline.py       Per-player orchestrator with signal injection
+├── evaluation/
+│   ├── metrics.py            InferenceMetrics + OptimizationMetrics accumulators
 │
-├── models/           Prediction models
-│   ├── baseline.py       Rolling mean, EWMA, form-based heuristics
-│   ├── regression.py     Ridge, XGBoost, LightGBM with rolling CV
-│   ├── ensemble.py       Weighted & adaptive ensemble
-│   └── rolling_cv.py     Time-aware cross-validation
+├── inference/
+│   ├── hmm.py                Scalar HMM: Forward, FB, Viterbi, Baum-Welch
+│   ├── kalman.py             1D Kalman Filter with adaptive noise + RTS smoother
+│   ├── multivariate_hmm.py   Position-specific MV-HMM with diagonal Gaussian emissions
+│   ├── enriched.py           Feature-rich ridge predictor + semi-variance
+│   ├── tft.py                TFT forecaster wrapper (quantile predictions)
+│   ├── fusion.py             Inverse-variance weighting
+│   └── pipeline.py           Per-player orchestrator with signal injection
 │
-├── selection/        Squad optimization
-│   ├── constraints.py    Formation, budget, team diversity
-│   └── optimizer.py      Greedy & ILP (PuLP)
+├── selection/
+│   ├── constraints.py        FormationConstraints, BudgetConstraint, TeamDiversityConstraint
+│   ├── optimizer.py          TwoLevelILPOptimizer + GreedyOptimizer
+│   ├── lagrangian.py         LagrangianOptimizer (subgradient dual ascent on budget constraint)
+│   └── base.py               BaseOptimizer ABC
 │
-├── signals/          External signal processing
-│   ├── news.py           Text → availability / risk / confidence
-│   ├── fixtures.py       Fixture difficulty & congestion
-│   └── stats.py          Weighted statistical scoring
+├── signals/
+│   ├── news.py               Text → availability / minutes_risk / confidence
+│   ├── fixtures.py           Fixture difficulty + congestion signals
+│   └── stats.py              Weighted statistical scoring
 │
-├── timeseries/       Feature engineering
-│   ├── transforms.py     Rolling, lag, EWMA, trend, consistency
-│   └── features.py       Pipeline producing 40+ features
+├── timeseries/
+│   ├── transforms.py         Rolling, lag, EWMA, trend, consistency
+│   └── features.py           FeatureEngineer pipeline (40+ features)
 │
-└── utils/            Configuration & validation
-    ├── config.py         Nested config with dot-notation
-    └── validation.py     Data quality checks & imputation
+└── utils/
+    ├── config.py             Nested Config with dot-notation access
+    └── validation.py         Data quality checks + imputation
+
+scripts/
+├── backtest_season.py        Full walk-forward backtest (inference + optimization)
+├── train_tft.py              TFT training script
+└── fetch_live_gw.py          Live gameweek deployment (FPL API → squad selection)
 ```
 
-## Two Execution Paths
+## Two-Level ILP Architecture
 
-`FPLModel.fit()` dispatches based on `config["model_type"]`:
+The optimizer solves a single joint problem for both squad and lineup:
+
+```
+Level 1: 15-player squad   (s_i ∈ {0,1})
+  ├── Budget ≤ £100m        (applied to squad, not lineup)
+  ├── Position quotas:       2 GK, 5 DEF, 5 MID, 3 FWD
+  └── Team diversity:        max 3 from any club
+
+Level 2: 11-player lineup  (x_i ∈ {0,1}, x_i ≤ s_i)
+  ├── Lineup size = 11
+  ├── 1 GK, 3–5 DEF, 2–5 MID, 1–3 FWD
+  └── Objective: max Σ (μ̂_i − λ·ρ_i) · x_i
+```
+
+where `ρ_i = sqrt(σ̂²_i)` (mean-variance) or `ρ_i = σ̂⁻_i` (semi-variance).
+
+## Double Gameweek Handling
+
+DGW handling has a single entry point in the data layer:
 
 ```mermaid
-graph TD
-    FIT["fit()"] --> CHECK{model_type?}
-    CHECK -->|"inference"| INF["_fit_inference()"]
-    CHECK -->|"baseline / xgboost / ..."| LEG["_fit_legacy()"]
-    INF --> PIPE["PlayerInferencePipeline per player"]
-    PIPE --> FUSED["expected_points + expected_variance"]
-    LEG --> FE["FeatureEngineer + Model.predict()"]
-    FE --> EP["expected_points only"]
-    FUSED --> OPT["Optimizer.solve()"]
-    EP --> OPT
-    OPT --> SQUAD["Squad"]
+graph LR
+    RAW[Per-fixture rows] --> AGG[aggregate_dgw_timeseries\nauto-called in build_player_objects]
+    AGG -->|one row / GW\npoints_norm| INF[Inference pipeline\nDGW-agnostic]
+    INF -->|per-fixture E[P], Var| SC[scale_predictions_for_dgw\n× n_fixtures before ILP]
+    SC --> ILP[Two-Level ILP]
 ```
+
+Inference components never see raw multi-row DGW data.
+The only DGW-aware step after the data layer is the ILP scaling call.
 
 ## Lazy Initialization
 
 All components use the `@property` pattern — instantiated on first access:
 
 ```python
-self._data_loader = None
-self._news_collector = None
-self._news_signal = None
-# ...
-
 @property
-def news_collector(self):
-    if self._news_collector is None:
-        self._news_collector = NewsCollector(
-            cache_dir=self.config.get("news_cache_dir")
-        )
-    return self._news_collector
+def data_loader(self):
+    if self._data_loader is None:
+        self._data_loader = FPLDataLoader(**self.config.get("data_loader", {}))
+    return self._data_loader
 ```
 
-This means unused components (e.g., `ILPOptimizer` when using greedy) are never instantiated and their optional dependencies (e.g., PuLP) are never imported.
+## Execution Paths
 
-## Constraint System
-
-The ILP formulation:
-
-$$\max \sum_i E[P_i] \cdot x_i$$
-
-subject to:
-
-$$\sum_i \text{cost}_i \cdot x_i \leq B \quad \text{(budget)}$$
-$$\sum_{i \in \text{pos}} x_i \in [\text{min}, \text{max}] \quad \text{(formation)}$$
-$$\sum_{i \in \text{team}} x_i \leq 3 \quad \text{(diversity)}$$
-$$\sum_i x_i = 11, \quad x_i \in \{0, 1\}$$
-
-Planned extension (mean-variance): replace objective with $\sum_i E[P_i] \cdot x_i - \lambda \sum_i \sqrt{\text{Var}[P_i]} \cdot x_i$, which remains linear in $x_i$ since $x_i$ is binary.
+```mermaid
+graph TD
+    FIT["fit()"] --> CHECK{model_type?}
+    CHECK -->|inference| PIPE["PlayerInferencePipeline per player"]
+    CHECK -->|baseline / xgboost| LEG["FeatureEngineer + Model.predict()"]
+    PIPE --> BLEND["Enriched+MV-HMM blend → E[P], Var[P], DR"]
+    LEG --> EP["expected_points only"]
+    BLEND --> DGW["DGW scaling"]
+    EP --> OPT["TwoLevelILPOptimizer.solve()"]
+    DGW --> OPT
+    OPT --> SQUAD["FullSquad (15 players + 11-player lineup)"]
+```

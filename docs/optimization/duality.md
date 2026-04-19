@@ -28,7 +28,7 @@ with equality when $x_i > 0$ (complementary slackness).
 ## Shadow Price Analysis
 
 !!! note "Planned Experiment"
-    Using the forecast data from Part I, we will:
+    Using the forecast data from Inference, we will:
 
     1. Solve the LP relaxation and extract dual variables
     2. Report $\lambda_B$ — the marginal value of budget
